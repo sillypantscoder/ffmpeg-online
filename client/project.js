@@ -9,6 +9,8 @@
 		row.appendChild(document.createElement("td")).innerHTML = `[${file.type} icon]`
 		// Name
 		row.appendChild(document.createElement("td")).innerHTML = `${file.name}`
+		// Convert Button
+		row.appendChild(document.createElement("td")).innerHTML = `<button onclick='convertFile(${JSON.stringify(file.name)})'>Convert...</button>`
 		// Download Button
 		row.appendChild(document.createElement("td")).innerHTML = `<button onclick='downloadFile(${JSON.stringify(file.name)})'>Download</button>`
 	}
@@ -22,4 +24,10 @@ function downloadFile(filename) {
 	a.href = "/file/" + location.pathname.split("/").at(-1) + "/" + filename
 	a.download = filename
 	a.click()
+}
+/**
+ * @param {string} filename
+ */
+function convertFile(filename) {
+	location.replace("/convert/" + location.pathname.split("/").at(-1) + "/" + filename)
 }

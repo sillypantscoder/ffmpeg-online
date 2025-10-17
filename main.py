@@ -1,9 +1,11 @@
-from server_lib import SafeDict, read_file, log, HTTPResponse, HTTPServer
+from server_lib import SafeDict, read_file, write_file, log, HTTPResponse, HTTPServer
 import os
 import re
 import random
 import typing
 import json
+import subprocess
+import threading
 
 FOLDER_PATH =            r"([a-zA-Z%0-9 _\.\+,!:;\(\)\-]+/)*"
 FILE_PATH = FOLDER_PATH + r"[a-zA-Z%0-9 _\.\+,!:;\(\)\-]+\.[a-zA-Z0-9]+"
@@ -32,21 +34,109 @@ def get_mime(extension: str):
 	if extension in ["png", "jpg", "jpeg", "heic", "webp"]: return "image/" + extension
 	if extension == "svg": return "image/svg+xml"
 	if extension in ["mov", "mp4", "webm"]: return "video/" + extension
-	if extension in ["mp3"]: return "audio/" + extension
+	if extension in ["mp3", "wav"]: return "audio/" + extension
 	return "application/octet-stream"
 
 
 
 class File:
 	def __init__(self, type: typing.Literal["audio", "video"], extension: str, contents: bytes):
-		self.type = type
+		self.type: typing.Literal["audio", "video"] = type
 		self.extension = extension
 		self.contents = contents
 
+class Conversion:
+	def get_name(self) -> str:
+		...
+	async def convert(self, files: list[File]) -> dict[str, File]:
+		...
+
+class ConversionWithOwnFolder(Conversion):
+	async def convert(self, files: list[File]) -> dict[str, File]:
+		# Create Folder
+		folder = "files_" + str(random.randint(1, 100000000))
+		os.makedirs(folder)
+		# Write Files
+		input_filenames: list[str] = []
+		for i in range(len(files)):
+			filename = folder + "/input_" + str(i) + "." + files[i].extension
+			write_file(filename, files[i].contents)
+			input_filenames.append(filename)
+		# Process Files
+		await self.process_files(folder, input_filenames)
+		# Get Result Files
+		new_files = [f"{folder}/{n}" for n in os.listdir(folder) if f"{folder}/{n}" not in input_filenames]
+		result_files = await self.get_result_files(new_files)
+		# Delete Folder
+		for n in os.listdir(folder): os.remove(f"{folder}/{n}")
+		os.removedirs(folder)
+		# Finish
+		return result_files
+	async def process_files(self, folder: str, input_filenames: list[str]):
+		...
+	async def get_result_files(self, new_files: list[str]) -> dict[str, File]:
+		...
+
+class FileFormatConversion(ConversionWithOwnFolder):
+	def __init__(self, type: typing.Literal["audio", "video"], previous_filename: str, new_format: str):
+		self.type: typing.Literal["audio", "video"] = type
+		self.new_format = new_format
+		self.filename = previous_filename
+	def get_name(self):
+		return "Convert to " + self.new_format.upper()
+	async def process_files(self, folder: str, input_filenames: list[str]):
+		subprocess.run([
+			"ffmpeg", "-i", input_filenames[0], folder + "/output." + self.new_format
+		], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+		# Extra time (for testing)
+		import time
+		time.sleep(5)
+	async def get_result_files(self, new_files: list[str]) -> dict[str, File]:
+		return {
+			self.filename + self.new_format: File(self.type, self.new_format, read_file(new_files[0]))
+		}
+
+def get_available_conversions(f: File, filename: str):
+	conversions: list[Conversion] = []
+	# Convert Audio Formats
+	if f.type == "audio":
+		if f.extension != "mp3": conversions.append(FileFormatConversion("audio", filename, "mp3"))
+		if f.extension != "wav": conversions.append(FileFormatConversion("audio", filename, "wav"))
+	# Finish
+	return conversions
+
+InProgressConversion: typing.TypeAlias = tuple[Conversion, typing.Coroutine[typing.Any, typing.Any, None]]
 class Project:
 	def __init__(self, id: str):
 		self.id = id
 		self.files: dict[str, File] = {}
+		self.processes: list[InProgressConversion] = []
+	def apply_conversion(self, f: File, conversion: Conversion):
+		"""Apply the conversion, and save the files when it is done."""
+		async def run_conversion():
+			# Get and save result files
+			result_files = await conversion.convert([f])
+			for filename in result_files:
+				# Find final filename for this file
+				save_filename = ".".join(filename.split(".")[:-1])
+				while save_filename + "." + result_files[filename].extension in self.files.keys():
+					save_filename += "_"
+				# Save this file!
+				self.files[save_filename + "." + result_files[filename].extension] = result_files[filename]
+			# Remove this conversion from process list
+			for proc in self.processes:
+				if proc[0] == conversion:
+					self.processes.remove(proc)
+					break
+		def run_conversion_sync():
+			coroutine = run_conversion()
+			self.processes.append((conversion, coroutine))
+			# Start the conversion!
+			try:
+				coroutine.send(None)
+			except StopIteration:
+				pass
+		threading.Thread(target=run_conversion_sync, name=None, args=()).start()
 
 PROJECTS: list[Project] = []
 
@@ -138,6 +228,49 @@ class FFMpegServer(HTTPServer):
 				},
 				"content": project.files[filename].contents
 			}
+		elif path.startswith("/convert/"):
+			# Find file in project
+			project_id = path.split("/")[2]
+			project = findProject(project_id)
+			if project == None:
+				return {
+					"status": 404,
+					"headers": {},
+					"content": b"Project Not Found"
+				}
+			filename = path.split("/")[3]
+			if filename not in project.files.keys():
+				return {
+					"status": 404,
+					"headers": {},
+					"content": b"File Not Found"
+				}
+			# Get conversions
+			conversions = get_available_conversions(project.files[filename], filename)
+			return {
+				"status": 200,
+				"headers": {
+					"Content-Type": "text/html"
+				},
+				"content": read_file("client/convert.html").replace(b"{{CONVERSION_DATA}}", json.dumps({
+					"file": {
+						"type": project.files[filename].type,
+						"name": filename
+					},
+					"conversions": [
+						{ "name": x.get_name() }
+						for x in conversions
+					]
+				}).encode("UTF-8"))
+			}
+		elif path == "/convert.js":
+			return {
+				"status": 200,
+				"headers": {
+					"Content-Type": "text/javascript"
+				},
+				"content": read_file("client/convert.js")
+			}
 		else: # 404 page
 			log("", "404 GET encountered: " + path)
 			return {
@@ -161,18 +294,43 @@ class FFMpegServer(HTTPServer):
 				filename += "_"
 			# File extension and type
 			file_extension = query.get("name").split(".")[-1].split("/")[0]
-			if file_extension in ["mp3"]:
-				file_type = "audio"
-			elif file_extension in ["mp4", "mov"]:
-				file_type = "video"
-			else:
+			mime_category = get_mime(file_extension).split("/")[0]
+			if mime_category == "audio": file_type = "audio"
+			elif mime_category == "video": file_type = "video"
+			else: return {
+				"status": 404,
+				"headers": {},
+				"content": b"Invalid File Type"
+			}
+			# Save
+			project.files[filename + "." + file_extension] = File(file_type, file_extension, body)
+			return {
+				"status": 200,
+				"headers": {},
+				"content": b""
+			}
+		elif path.startswith("/convert/"):
+			# Find file in project
+			project_id = path.split("/")[2]
+			project = findProject(project_id)
+			if project == None:
 				return {
 					"status": 404,
 					"headers": {},
-					"content": b"Invalid File Type"
+					"content": b"Project Not Found"
 				}
-			# Save
-			project.files[filename + "." + file_extension] = File(file_type, file_extension, body)
+			filename = path.split("/")[3]
+			if filename not in project.files.keys():
+				return {
+					"status": 404,
+					"headers": {},
+					"content": b"File Not Found"
+				}
+			# Get conversion
+			conversion_index = int(path.split("/")[4])
+			conversion = get_available_conversions(project.files[filename], filename)[conversion_index]
+			# Apply conversion
+			project.apply_conversion(project.files[filename], conversion)
 			return {
 				"status": 200,
 				"headers": {},
