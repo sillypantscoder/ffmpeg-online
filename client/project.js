@@ -1,9 +1,10 @@
 (() => {
 	var table = document.querySelector("table")
 	if (table == null) throw new Error("table must exist")
-	/** @type {{ name: string, type: "audio" | "video" }[]} */
+	/** @type {{ files: { name: string, type: "audio" | "video" }[], conversions: { name: string }[] }} */
 	var project_data = JSON.parse(document.querySelector("script[type='text/plain']")?.textContent ?? "")
-	for (var file of project_data) {
+	// Create file elements
+	for (var file of project_data.files) {
 		let row = table.appendChild(document.createElement("tr"))
 		// Icon
 		row.appendChild(document.createElement("td")).innerHTML = `[${file.type} icon]`
@@ -13,6 +14,24 @@
 		row.appendChild(document.createElement("td")).innerHTML = `<button onclick='convertFile(${JSON.stringify(file.name)})'>Convert...</button>`
 		// Download Button
 		row.appendChild(document.createElement("td")).innerHTML = `<button onclick='downloadFile(${JSON.stringify(file.name)})'>Download</button>`
+	}
+	// Create conversion elements
+	if (project_data.conversions.length > 0) {
+		// Create second table
+		var table2 = document.createElement("table")
+		table.insertAdjacentElement("afterend", table2)
+		// Create heading (inserted before table)
+		{
+			let table2heading = document.createElement("h3")
+			table2heading.innerText = "In-progress conversions"
+			table2.insertAdjacentElement("beforebegin", table2heading)
+		}
+		// Elements
+		for (var conversion of project_data.conversions) {
+			let row = table2.appendChild(document.createElement("tr"))
+			// Name
+			row.appendChild(document.createElement("td")).innerHTML = `${conversion.name}`
+		}
 	}
 })();
 

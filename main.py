@@ -44,9 +44,24 @@ class File:
 		self.type: typing.Literal["audio", "video"] = type
 		self.extension = extension
 		self.contents = contents
+	@staticmethod
+	def guess_type(data: bytes) -> typing.Literal["audio", "video"]:
+		# Use ffprobe
+		write_file("checkfile.dat", data)
+		raw_info = subprocess.run(["ffprobe", "checkfile.dat"], stderr=subprocess.PIPE).stderr
+		# Analyze returned info
+		streams_raw = [b": ".join(line.split(b": ")[1:]) for line in raw_info.split(b"\n") if b"Stream" in line]
+		has_audio = any([(b"Audio" in line) for line in streams_raw])
+		has_video = any([(b"Video" in line and b"kb/s" in line) for line in streams_raw]) # we don't want to accidentally interpret images as video streams
+		# Check for video
+		if not (has_audio or has_video): raise ValueError("This file is not a video/audio file")
+		if has_video: return "video"
+		else: return "audio"
 
 class Conversion:
 	def get_name(self) -> str:
+		...
+	def get_status(self) -> str:
 		...
 	async def convert(self, files: list[File]) -> dict[str, File]:
 		...
@@ -84,13 +99,12 @@ class FileFormatConversion(ConversionWithOwnFolder):
 		self.filename = previous_filename
 	def get_name(self):
 		return "Convert to " + self.new_format.upper()
+	def get_status(self):
+		return "Converting " + self.filename + " to " + self.new_format.upper()
 	async def process_files(self, folder: str, input_filenames: list[str]):
 		subprocess.run([
 			"ffmpeg", "-i", input_filenames[0], folder + "/output." + self.new_format
 		], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-		# Extra time (for testing)
-		import time
-		time.sleep(5)
 	async def get_result_files(self, new_files: list[str]) -> dict[str, File]:
 		return {
 			self.filename + self.new_format: File(self.type, self.new_format, read_file(new_files[0]))
@@ -192,10 +206,16 @@ class FFMpegServer(HTTPServer):
 				"headers": {
 					"Content-Type": "text/html"
 				},
-				"content": read_file("client/project.html").replace(b"{{PROJECT_DATA}}", json.dumps([
-					{ "name": x, "type": project.files[x].type }
-					for x in project.files.keys()
-				]).encode("UTF-8"))
+				"content": read_file("client/project.html").replace(b"{{PROJECT_DATA}}", json.dumps({
+					"files": [
+						{ "name": x, "type": project.files[x].type }
+						for x in project.files.keys()
+					],
+					"conversions": [
+						{ "name": x[0].get_status() }
+						for x in project.processes
+					]
+				}).encode("UTF-8"))
 			}
 		elif path == "/project.js":
 			return {
@@ -294,11 +314,10 @@ class FFMpegServer(HTTPServer):
 				filename += "_"
 			# File extension and type
 			file_extension = query.get("name").split(".")[-1].split("/")[0]
-			mime_category = get_mime(file_extension).split("/")[0]
-			if mime_category == "audio": file_type = "audio"
-			elif mime_category == "video": file_type = "video"
-			else: return {
-				"status": 404,
+			try:
+				file_type = File.guess_type(body)
+			except: return {
+				"status": 400,
 				"headers": {},
 				"content": b"Invalid File Type"
 			}
