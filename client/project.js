@@ -46,9 +46,13 @@ function formatFileDuration(seconds) {
 	else return `${minutes} minutes ${seconds.toString().padStart(2, "0")} seconds`
 }
 
-(() => {
+function updateProjectInfo() {
+	// Erase previous data
 	var fileContainer = document.querySelector("#files")
-	if (fileContainer == null) throw new Error("file container must exist")
+	if (fileContainer == null) throw new Error("file container must exist");
+	[...fileContainer.children].forEach((v) => v.remove());
+	[...document.querySelectorAll("button[disabled], script + h3, ol")].forEach((v) => v.remove());
+	// Get project data
 	/** @type {{ files: { name: string, type: "audio" | "video", size: number, duration: number }[], conversions: { name: string }[] }} */
 	var project_data = JSON.parse(document.querySelector("script[type='text/plain']")?.innerHTML ?? "")
 	// Create file elements
@@ -88,7 +92,32 @@ function formatFileDuration(seconds) {
 			row.innerHTML = `${conversion.name}`
 		}
 	}
-})();
+	// Create refresh button
+	{
+		let refreshbtn = document.body.appendChild(document.createElement("button"))
+		refreshbtn.innerText = "Refresh"
+		refreshbtn.addEventListener("click", () => {
+			refreshbtn.disabled = true
+			/** @type {Promise<string>} */
+			var promise = new Promise((resolve) => {
+				var x = new XMLHttpRequest()
+				x.open("GET", "/project/" + location.pathname.split("/").at(-1))
+				x.addEventListener("loadend", () => resolve(x.responseText))
+				x.send()
+			})
+			promise.then((html) => {
+				var project_data = html.substring(html.indexOf("/plain\">") + 8, html.indexOf("</script>"))
+				// Update element with new project data
+				var dataContainer = document.querySelector("script[type='text/plain']")
+				if (dataContainer == null) throw new Error("project data container must exist")
+				dataContainer.textContent = project_data
+				// Refresh display
+				updateProjectInfo()
+			})
+		})
+	}
+}
+updateProjectInfo()
 
 /**
  * @param {File[]} files
