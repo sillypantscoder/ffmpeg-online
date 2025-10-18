@@ -6,6 +6,13 @@ body {
 	font-family: sans-serif;
 	margin: 1em;
 }
+img {
+	height: 1em;
+	width: auto;
+	vertical-align: middle;
+	margin-left: 0.5em;
+	margin-right: 0.25em;
+}
 #convert_buttons button {
 	display: inline-block;
 	margin: 0.5em;
@@ -18,12 +25,9 @@ body {
 	font-family: inherit;
 	color: inherit;
 }
-img {
-	height: 1em;
-	width: auto;
-	vertical-align: middle;
-	margin-left: 0.5em;
-	margin-right: 0.25em;
+#convert_buttons button.selected {
+	background: blue;
+	color: white;
 }
 		</style>
 	</head>
@@ -31,6 +35,7 @@ img {
 		<div><button onclick="cancelConversion()">Cancel</button></div>
 		<h3>Convert<img><span></span></h3>
 		<div id="convert_buttons"></div>
+		<div id="c_info"></div>
 		<script type="text/plain">{{CONVERSION_DATA}}</script>
 		<script src="/convert.js"></script>
 	</body>

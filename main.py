@@ -58,13 +58,15 @@ class File:
 class Conversion:
 	def get_name(self) -> str:
 		...
+	def get_arguments(self) -> list[str]:
+		return []
 	def get_status(self) -> str:
 		...
-	async def convert(self, files: list[File]) -> dict[str, File]:
+	async def convert(self, files: list[File], extra_data: str) -> dict[str, File]:
 		...
 
 class ConversionWithOwnFolder(Conversion):
-	async def convert(self, files: list[File]) -> dict[str, File]:
+	async def convert(self, files: list[File], extra_data: str) -> dict[str, File]:
 		# Create Folder
 		folder = "files_" + str(random.randint(1, 100000000))
 		os.makedirs(folder)
@@ -75,7 +77,7 @@ class ConversionWithOwnFolder(Conversion):
 			write_file(filename, files[i].contents)
 			input_filenames.append(filename)
 		# Process Files
-		await self.process_files(folder, input_filenames)
+		await self.process_files(folder, input_filenames, extra_data)
 		# Get Result Files
 		new_files = [f"{folder}/{n}" for n in os.listdir(folder) if f"{folder}/{n}" not in input_filenames]
 		result_files = await self.get_result_files(new_files)
@@ -84,9 +86,10 @@ class ConversionWithOwnFolder(Conversion):
 		os.removedirs(folder)
 		# Finish
 		return result_files
-	async def process_files(self, folder: str, input_filenames: list[str]):
+	async def process_files(self, folder: str, input_filenames: list[str], extra_data: str):
 		...
 	async def get_result_files(self, new_files: list[str]) -> dict[str, File]:
+		"""Return a list of files to add to the project. The file extension of each filename will be removed and replaced with the file extension from the associated File object."""
 		...
 
 class FileFormatConversion(ConversionWithOwnFolder):
@@ -98,13 +101,52 @@ class FileFormatConversion(ConversionWithOwnFolder):
 		return "Convert to " + self.new_format.upper()
 	def get_status(self):
 		return "Converting " + self.filename + " to " + self.new_format.upper()
-	async def process_files(self, folder: str, input_filenames: list[str]):
+	async def process_files(self, folder: str, input_filenames: list[str], extra_data: str):
 		subprocess.run([
 			"ffmpeg", "-i", input_filenames[0], folder + "/output." + self.new_format
 		], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 	async def get_result_files(self, new_files: list[str]) -> dict[str, File]:
 		return {
-			self.filename + self.new_format: File(self.type, self.new_format, read_file(new_files[0]))
+			self.filename: File(self.type, self.new_format, read_file(new_files[0]))
+		}
+
+class CutConversion(ConversionWithOwnFolder):
+	def __init__(self, type: typing.Literal["audio", "video"], filename: str):
+		self.type: typing.Literal["audio", "video"] = type
+		self.file_name = ".".join(filename.split(".")[:-1])
+		self.file_extension = filename.split(".")[-1]
+	def get_name(self):
+		return "Cut"
+	def get_arguments(self) -> list[str]:
+		return ["time Start time", "time Duration", "checkbox Absolute end time instead of duration"]
+	def get_status(self):
+		return "Cutting " + self.file_name + "." + self.file_extension
+	async def process_files(self, folder: str, input_filenames: list[str], extra_data: str):
+		# Process start time
+		start_time_raw = extra_data.split("\n")[0]
+		start_time_int = [int(start_time_raw.split(":")[0]), int(start_time_raw.split(":")[1]), int(start_time_raw.split(":")[2])]
+		start_time_str = f"{str(start_time_int[0]).rjust(2, '0')}:{str(start_time_int[1]).rjust(2, '0')}:{str(start_time_int[2]).rjust(2, '0')}"
+		# Process end time
+		end_time_raw = extra_data.split("\n")[1]
+		end_time_int = [int(end_time_raw.split(":")[0]), int(end_time_raw.split(":")[1]), int(end_time_raw.split(":")[2])]
+		is_duration = extra_data.split("\n")[2] == "false"
+		if is_duration:
+			# Update seconds
+			end_time_int[2] += start_time_int[2]
+			while end_time_int[2] >= 60: end_time_int[2] -= 60; end_time_int[1] += 1
+			# Update minutes
+			end_time_int[1] += start_time_int[1]
+			while end_time_int[1] >= 60: end_time_int[1] -= 60; end_time_int[0] += 1
+			# Update hours
+			end_time_int[0] += start_time_int[0]
+		end_time_str = f"{str(end_time_int[0]).rjust(2, '0')}:{str(end_time_int[1]).rjust(2, '0')}:{str(end_time_int[2]).rjust(2, '0')}"
+		# Run command
+		subprocess.run([
+			"ffmpeg", "-progress", "-", "-nostats", "-i", input_filenames[0], "-ss", start_time_str, "-to", end_time_str, folder + "/output." + self.file_extension
+		], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+	async def get_result_files(self, new_files: list[str]) -> dict[str, File]:
+		return {
+			self.file_name + "_cut." + self.file_extension: File(self.type, self.file_extension, read_file(new_files[0]))
 		}
 
 def get_available_conversions(f: File, filename: str):
@@ -121,6 +163,8 @@ def get_available_conversions(f: File, filename: str):
 		if f.extension != "mp4": conversions.append(FileFormatConversion("video", filename, "mp4"))
 		if f.extension != "mov": conversions.append(FileFormatConversion("video", filename, "mov"))
 		if f.extension != "webm": conversions.append(FileFormatConversion("video", filename, "webm"))
+	# Cut Media
+	if f.extension == "mp3" or f.extension == "mp4": conversions.append(CutConversion(f.type, filename))
 	# Finish
 	return conversions
 
@@ -130,11 +174,11 @@ class Project:
 		self.id = id
 		self.files: dict[str, File] = {}
 		self.processes: list[InProgressConversion] = []
-	def apply_conversion(self, f: File, conversion: Conversion):
+	def apply_conversion(self, f: File, conversion: Conversion, extra_data: str):
 		"""Apply the conversion, and save the files when it is done."""
 		async def run_conversion():
 			# Get and save result files
-			result_files = await conversion.convert([f])
+			result_files = await conversion.convert([f], extra_data)
 			for filename in result_files:
 				# Find final filename for this file
 				save_filename = ".".join(filename.split(".")[:-1])
@@ -291,7 +335,7 @@ class FFMpegServer(HTTPServer):
 						"name": filename
 					},
 					"conversions": [
-						{ "name": x.get_name() }
+						{ "name": x.get_name(), "arguments": x.get_arguments() }
 						for x in conversions
 					]
 				}).encode("UTF-8"))
@@ -363,7 +407,7 @@ class FFMpegServer(HTTPServer):
 			conversion_index = int(path.split("/")[4])
 			conversion = get_available_conversions(project.files[filename], filename)[conversion_index]
 			# Apply conversion
-			project.apply_conversion(project.files[filename], conversion)
+			project.apply_conversion(project.files[filename], conversion, body.decode("UTF-8"))
 			return {
 				"status": 200,
 				"headers": {},
