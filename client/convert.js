@@ -30,3 +30,8 @@ async function applyConversion(i) {
 	// redirect back to project screen
 	location.replace("/project/" + location.pathname.split("/").at(-2))
 }
+
+function cancelConversion() {
+	// redirect back to project screen
+	location.replace("/project/" + location.pathname.split("/").at(-2))
+}

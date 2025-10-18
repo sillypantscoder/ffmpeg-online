@@ -17,24 +17,39 @@
 	}
 	// Create conversion elements
 	if (project_data.conversions.length > 0) {
-		// Create second table
-		var table2 = document.createElement("table")
-		table.insertAdjacentElement("afterend", table2)
-		// Create heading (inserted before table)
+		// Create conversion list
+		var c_list = document.appendChild(document.createElement("ol"))
+		// Create heading (inserted before c_list)
 		{
 			let table2heading = document.createElement("h3")
 			table2heading.innerText = "In-progress conversions"
-			table2.insertAdjacentElement("beforebegin", table2heading)
+			c_list.insertAdjacentElement("beforebegin", table2heading)
 		}
 		// Elements
 		for (var conversion of project_data.conversions) {
-			let row = table2.appendChild(document.createElement("tr"))
-			// Name
-			row.appendChild(document.createElement("td")).innerHTML = `${conversion.name}`
+			let row = c_list.appendChild(document.createElement("li"))
+			row.innerHTML = `${conversion.name}`
 		}
 	}
 })();
 
+/**
+ * @param {File[]} files
+ */
+async function uploadFiles(files) {
+	if (files.length == 0) return;
+	// upload file
+	for (var file of files) {
+		await new Promise((resolve) => {
+			var x = new XMLHttpRequest()
+			x.open("POST", "/create_file/" + location.pathname.split("/").at(-1) + "?name=" + file.name)
+			x.addEventListener("loadend", () => resolve(x.responseText))
+			x.send(file)
+		})
+	}
+	// refresh
+	location.reload()
+}
 /**
  * @param {string} filename
  */
