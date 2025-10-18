@@ -30,6 +30,28 @@ def get_file_size(filename: str) -> int:
 		return len(filename.split("/")[-1]) + sum([get_file_size(os.path.join(filename, subfile)) for subfile in os.listdir(filename)])
 	return len(filename.split("/")[-1]) + os.path.getsize(filename)
 
+def runFFMpegCommandWithProgress(command: list[str], expected_duration: str | int, progress_callback: typing.Callable[[ float, float ], None]):
+	# First find the file size
+	if isinstance(expected_duration, str):
+		duration_seconds = float(subprocess.run([
+			"ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", expected_duration
+		], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout.decode("UTF-8").strip())
+	else:
+		duration_seconds = expected_duration
+	# Start the command
+	proc = subprocess.Popen(["ffmpeg", "-progress", "-", "-nostats", *command], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+	if proc.stdout == None: raise TypeError
+	while True:
+		line = proc.stdout.readline()
+		if line.startswith(b"out_time="):
+			# Calculate given time
+			timeH = float(line.split(b"=")[1].split(b":")[0].decode("UTF-8"))
+			timeM = float(line.split(b"=")[1].split(b":")[1].decode("UTF-8"))
+			timeS = float(line.split(b"=")[1].split(b":")[2].decode("UTF-8"))
+			timeTotal = (60 * ((60 * timeH) + timeM)) + timeS
+			progress_callback(timeTotal, duration_seconds)
+		if line == b"progress=end\n": break # Done!
+
 
 
 class File:
@@ -97,14 +119,17 @@ class FileFormatConversion(ConversionWithOwnFolder):
 		self.type: typing.Literal["audio", "video"] = type
 		self.new_format = new_format
 		self.filename = previous_filename
+		self.progress = "0"
 	def get_name(self):
 		return "Convert to " + self.new_format.upper()
 	def get_status(self):
-		return "Converting " + self.filename + " to " + self.new_format.upper()
+		return "Converting " + self.filename + " to " + self.new_format.upper() + " (" + self.progress + "% done)"
 	async def process_files(self, folder: str, input_filenames: list[str], extra_data: str):
-		subprocess.run([
-			"ffmpeg", "-i", input_filenames[0], folder + "/output." + self.new_format
-		], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+		runFFMpegCommandWithProgress([
+			"-i", input_filenames[0], folder + "/output." + self.new_format
+		], input_filenames[0], self.setProgress)
+	def setProgress(self, done: float, total: float):
+		self.progress = str(round(1000 * done / total) / 10)
 	async def get_result_files(self, new_files: list[str]) -> dict[str, File]:
 		return {
 			self.filename: File(self.type, self.new_format, read_file(new_files[0]))
@@ -115,13 +140,14 @@ class CutConversion(ConversionWithOwnFolder):
 		self.type: typing.Literal["audio", "video"] = type
 		self.file_name = ".".join(filename.split(".")[:-1])
 		self.file_extension = filename.split(".")[-1]
+		self.progress = "0"
 	def get_name(self):
 		return "Cut"
 	def get_arguments(self) -> list[str]:
 		return ["time Start time", "time Duration", "checkbox Absolute end time instead of duration"]
 	def get_status(self):
-		return "Cutting " + self.file_name + "." + self.file_extension
-	async def process_files(self, folder: str, input_filenames: list[str], extra_data: str):
+		return "Cutting " + self.file_name + "." + self.file_extension + " (" + self.progress + "% done)"
+	async def processStartTimeEndTimeDuration(self, extra_data: str):
 		# Process start time
 		start_time_raw = extra_data.split("\n")[0]
 		start_time_int = [int(start_time_raw.split(":")[0]), int(start_time_raw.split(":")[1]), int(start_time_raw.split(":")[2])]
@@ -140,10 +166,20 @@ class CutConversion(ConversionWithOwnFolder):
 			# Update hours
 			end_time_int[0] += start_time_int[0]
 		end_time_str = f"{str(end_time_int[0]).rjust(2, '0')}:{str(end_time_int[1]).rjust(2, '0')}:{str(end_time_int[2]).rjust(2, '0')}"
+		# Find duration (for progress indicator)
+		start_time_sec = (60 * 60 * start_time_int[0]) + (60 * start_time_int[1]) + start_time_int[2]
+		end_time_sec = (60 * 60 * end_time_int[0]) + (60 * end_time_int[1]) + end_time_int[2]
+		duration = end_time_sec - start_time_sec
+		# Return info
+		return (start_time_str, end_time_str, duration)
+	async def process_files(self, folder: str, input_filenames: list[str], extra_data: str):
+		start_time_str, end_time_str, duration = await self.processStartTimeEndTimeDuration(extra_data)
 		# Run command
-		subprocess.run([
-			"ffmpeg", "-progress", "-", "-nostats", "-i", input_filenames[0], "-ss", start_time_str, "-to", end_time_str, folder + "/output." + self.file_extension
-		], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+		runFFMpegCommandWithProgress([
+			"-i", input_filenames[0], "-ss", start_time_str, "-to", end_time_str, folder + "/output." + self.file_extension
+		], duration, self.setProgress)
+	def setProgress(self, done: float, total: float):
+		self.progress = str(round(1000 * done / total) / 10)
 	async def get_result_files(self, new_files: list[str]) -> dict[str, File]:
 		return {
 			self.file_name + "_cut." + self.file_extension: File(self.type, self.file_extension, read_file(new_files[0]))
