@@ -55,9 +55,10 @@ def runFFMpegCommandWithProgress(command: list[str], expected_duration: str | in
 
 
 class File:
-	def __init__(self, type: typing.Literal["audio", "video"], extension: str, contents: bytes):
+	def __init__(self, type: typing.Literal["audio", "video"], extension: str, duration: float, contents: bytes):
 		self.type: typing.Literal["audio", "video"] = type
 		self.extension = extension
+		self.duration = duration
 		self.contents = contents
 	def get_mime(self):
 		subtype = self.extension
@@ -76,6 +77,12 @@ class File:
 		if not (has_audio or has_video): raise ValueError("This file is not a video/audio file")
 		if has_video: return "video"
 		else: return "audio"
+	@staticmethod
+	def get_duration(data: bytes):
+		write_file("checkfile.dat", data)
+		return float(subprocess.run([
+			"ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", "checkfile.dat"
+		], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout.decode("UTF-8").strip())
 
 class Conversion:
 	def get_name(self) -> str:
@@ -132,7 +139,7 @@ class FileFormatConversion(ConversionWithOwnFolder):
 		self.progress = str(round(1000 * done / total) / 10)
 	async def get_result_files(self, new_files: list[str]) -> dict[str, File]:
 		return {
-			self.filename: File(self.type, self.new_format, read_file(new_files[0]))
+			self.filename: File(self.type, self.new_format, File.get_duration(read_file(new_files[0])), read_file(new_files[0]))
 		}
 
 class CutConversion(ConversionWithOwnFolder):
@@ -182,7 +189,8 @@ class CutConversion(ConversionWithOwnFolder):
 		self.progress = str(round(1000 * done / total) / 10)
 	async def get_result_files(self, new_files: list[str]) -> dict[str, File]:
 		return {
-			self.file_name + "_cut." + self.file_extension: File(self.type, self.file_extension, read_file(new_files[0]))
+			self.file_name + "_cut." + self.file_extension:
+				File(self.type, self.file_extension, File.get_duration(read_file(new_files[0])), read_file(new_files[0]))
 		}
 
 def get_available_conversions(f: File, filename: str):
@@ -293,7 +301,7 @@ class FFMpegServer(HTTPServer):
 				},
 				"content": read_file("client/project.html").replace(b"{{PROJECT_DATA}}", json.dumps({
 					"files": [
-						{ "name": x, "type": project.files[x].type }
+						{ "name": x, "type": project.files[x].type, "size": len(project.files[x].contents), "duration": project.files[x].duration }
 						for x in project.files.keys()
 					],
 					"conversions": [
@@ -416,7 +424,7 @@ class FFMpegServer(HTTPServer):
 				"content": b"Invalid File Type"
 			}
 			# Save
-			project.files[filename + "." + file_extension] = File(file_type, file_extension, body)
+			project.files[filename + "." + file_extension] = File(file_type, file_extension, File.get_duration(body), body)
 			return {
 				"status": 200,
 				"headers": {},

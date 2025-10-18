@@ -28,11 +28,28 @@ function createContextMenu(alignElm, menu_buttons) {
 		if (! menu.contains(e.target)) e.stopPropagation()
 	}, { capture: true, once: true })
 }
+/** @param {number} bytes */
+function formatFileSize(bytes) {
+	              if (bytes < 1024) return (bytes)                       .toFixed(0) +  " B";
+	       if (bytes < 1024 * 1024) return (bytes / 1024)                .toFixed(0) + " KB";
+	if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024))       .toFixed(1) + " MB";
+	                           else return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+}
+/**
+ * @param {number} seconds
+ */
+function formatFileDuration(seconds) {
+	var minutes = Math.floor(seconds / 60); seconds -= minutes * 60;
+	var hours = Math.floor(minutes / 60); minutes -= hours * 60;
+	seconds = Math.round(seconds * 100) / 100
+	if (hours > 0) return `${hours} hours ${minutes.toString().padStart(2, "0")} minutes ${seconds.toString().padStart(2, "0")} seconds`
+	else return `${minutes} minutes ${seconds.toString().padStart(2, "0")} seconds`
+}
 
 (() => {
 	var fileContainer = document.querySelector("#files")
 	if (fileContainer == null) throw new Error("file container must exist")
-	/** @type {{ files: { name: string, type: "audio" | "video" }[], conversions: { name: string }[] }} */
+	/** @type {{ files: { name: string, type: "audio" | "video", size: number, duration: number }[], conversions: { name: string }[] }} */
 	var project_data = JSON.parse(document.querySelector("script[type='text/plain']")?.innerHTML ?? "")
 	// Create file elements
 	for (var file of project_data.files) {
@@ -41,14 +58,14 @@ function createContextMenu(alignElm, menu_buttons) {
 		// Icon
 		row.appendChild(document.createElement("div")).innerHTML = `<img src="/icons/${file.type}_file.svg">`
 		// Name
-		row.appendChild(document.createElement("div")).innerHTML = `<span>${file.name}</span>`
+		row.appendChild(document.createElement("div")).innerHTML = `<span>${file.name}<div style="font-size: 0.75em; opacity: 0.75;">${formatFileSize(file.size)} - ${formatFileDuration(file.duration)}</div></span>`
 		// Convert Button
 		row.appendChild(document.createElement("div")).innerHTML = `<button class="special-btn">Convert...</button>`
 		row.children[2].children[0].addEventListener("click", convertFile.bind(null, file.name))
 		// Menu Button
 		row.appendChild(document.createElement("div")).innerHTML = `<button><img src="/icons/menu.svg"></button>`
 		row.children[3].children[0].addEventListener("click", () => createContextMenu(row.children[3].children[0], [
-			{ name: "Download", icon: "M 48 64 L 28 44 L 33.6 38.2 L 44 48.6 V 16 H 52 V 48.6 L 62.4 38.2 L 68 44 L 48 64 Z M 24 80 Q 20.7 80 18.35 77.65 T 16 72 V 60 H 24 V 72 H 72 V 60 H 80 V 72 Q 80 75.3 77.65 77.65 T 72 80 H 24 Z",
+			{ name: "Download", icon: "M 5 6.67 L 2.92 4.58 L 3.5 3.98 L 4.58 5.06 V 1.67 H 5.42 V 5.06 L 6.5 3.98 L 7.08 4.58 L 5 6.67 Z M 2.5 8.33 Q 2.16 8.33 1.91 8.09 T 1.67 7.5 V 6.25 H 2.5 V 7.5 H 7.5 V 6.25 H 8.33 V 7.5 Q 8.33 7.84 8.09 8.09 T 7.5 8.33 H 2.5 Z",
 				onclick: downloadFile.bind(null, file.name) },
 			{ name: "Rename", icon: "M 1 7 L 1 9 L 3 9 L 9 3 L 7 1 Z M 2 7 L 7 2 L 8 3 L 3 8 Z", onclick: renameFile.bind(null, file.name) },
 			{ name: "Delete", icon: "M 6.5 9 A 1 1 0 0 0 7.5 8 L 7.5 4 A 1 1 0 0 0 6.5 3 L 3.5 3 A 1 1 0 0 0 2.5 4 L 2.5 8 A 1 1 0 0 0 3.5 9 Z M 2.5 1.9 A 0.5 0.5 0 0 0 2.5 2.9 L 7.5 2.9 A 0.5 0.5 0 0 0 7.5 1.9 Z M 4 1.9 A 1 1 0 0 1 6 1.9 L 5.5 1.9 A 0.5 0.5 0 0 0 4.5 1.9 Z M 3.4 4 A 0.3 0.3 0 0 1 4 4 L 4 8 A 0.3 0.3 0 0 1 3.4 8 Z M 4.7 4 A 0.3 0.3 0 0 1 5.3 4 L 5.3 8 A 0.3 0.3 0 0 1 4.7 8 Z M 6 4 A 0.3 0.3 0 0 1 6.6 4 L 6.6 8 A 0.3 0.3 0 0 1 6 8 Z",
