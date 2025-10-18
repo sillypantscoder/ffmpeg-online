@@ -6,6 +6,7 @@ import typing
 import json
 import subprocess
 import threading
+from urllib.parse import unquote
 
 FOLDER_PATH =            r"([a-zA-Z%0-9 _\.\+,!:;\(\)\-]+/)*"
 FILE_PATH = FOLDER_PATH + r"[a-zA-Z%0-9 _\.\+,!:;\(\)\-]+\.[a-zA-Z0-9]+"
@@ -29,14 +30,6 @@ def get_file_size(filename: str) -> int:
 		return len(filename.split("/")[-1]) + sum([get_file_size(os.path.join(filename, subfile)) for subfile in os.listdir(filename)])
 	return len(filename.split("/")[-1]) + os.path.getsize(filename)
 
-def get_mime(extension: str):
-	if extension == "pdf": return "application/pdf"
-	if extension in ["png", "jpg", "jpeg", "heic", "webp"]: return "image/" + extension
-	if extension == "svg": return "image/svg+xml"
-	if extension in ["mov", "mp4", "webm"]: return "video/" + extension
-	if extension in ["mp3", "wav"]: return "audio/" + extension
-	return "application/octet-stream"
-
 
 
 class File:
@@ -44,6 +37,10 @@ class File:
 		self.type: typing.Literal["audio", "video"] = type
 		self.extension = extension
 		self.contents = contents
+	def get_mime(self):
+		subtype = self.extension
+		if self.extension == "mov": subtype = "quicktime"
+		return self.type + "/" + subtype
 	@staticmethod
 	def guess_type(data: bytes) -> typing.Literal["audio", "video"]:
 		# Use ffprobe
@@ -111,11 +108,19 @@ class FileFormatConversion(ConversionWithOwnFolder):
 		}
 
 def get_available_conversions(f: File, filename: str):
+	"""ADD NEW FILE TYPES HERE"""
 	conversions: list[Conversion] = []
 	# Convert Audio Formats
 	if f.type == "audio":
 		if f.extension != "mp3": conversions.append(FileFormatConversion("audio", filename, "mp3"))
 		if f.extension != "wav": conversions.append(FileFormatConversion("audio", filename, "wav"))
+		if f.extension != "webm": conversions.append(FileFormatConversion("audio", filename, "webm"))
+		if f.extension != "ogg": conversions.append(FileFormatConversion("audio", filename, "ogg"))
+	# Convert Video Formats
+	if f.type == "video":
+		if f.extension != "mp4": conversions.append(FileFormatConversion("video", filename, "mp4"))
+		if f.extension != "mov": conversions.append(FileFormatConversion("video", filename, "mov"))
+		if f.extension != "webm": conversions.append(FileFormatConversion("video", filename, "webm"))
 	# Finish
 	return conversions
 
@@ -225,8 +230,16 @@ class FFMpegServer(HTTPServer):
 				},
 				"content": read_file("client/project.js")
 			}
+		elif matches(path, r"/icons/[a-zA-Z_]+\.svg"):
+			return {
+				"status": 200,
+				"headers": {
+					"Content-Type": "image/svg+xml"
+				},
+				"content": read_file("client" + path)
+			}
 		elif path.startswith("/file/"):
-			project_id = path.split("/")[2]
+			project_id = unquote(path).split("/")[2]
 			project = findProject(project_id)
 			if project == None:
 				return {
@@ -234,7 +247,7 @@ class FFMpegServer(HTTPServer):
 					"headers": {},
 					"content": b"Project Not Found"
 				}
-			filename = path.split("/")[3]
+			filename = unquote(path).split("/")[3]
 			if filename not in project.files.keys():
 				return {
 					"status": 404,
@@ -244,13 +257,13 @@ class FFMpegServer(HTTPServer):
 			return {
 				"status": 200,
 				"headers": {
-					"Content-Type": get_mime(filename.split(".")[-1])
+					"Content-Type": project.files[filename].get_mime()
 				},
 				"content": project.files[filename].contents
 			}
 		elif path.startswith("/convert/"):
 			# Find file in project
-			project_id = path.split("/")[2]
+			project_id = unquote(path).split("/")[2]
 			project = findProject(project_id)
 			if project == None:
 				return {
@@ -258,7 +271,7 @@ class FFMpegServer(HTTPServer):
 					"headers": {},
 					"content": b"Project Not Found"
 				}
-			filename = path.split("/")[3]
+			filename = unquote(path).split("/")[3]
 			if filename not in project.files.keys():
 				return {
 					"status": 404,
@@ -310,6 +323,7 @@ class FFMpegServer(HTTPServer):
 				}
 			# Find filename
 			filename = ".".join(query.get("name").split(".")[:-1]).split("/")[0]
+			filename = filename.replace("<", "").replace(">", "").replace("/", "").replace("&", "")
 			while filename in project.files.keys():
 				filename += "_"
 			# File extension and type
@@ -330,7 +344,7 @@ class FFMpegServer(HTTPServer):
 			}
 		elif path.startswith("/convert/"):
 			# Find file in project
-			project_id = path.split("/")[2]
+			project_id = unquote(path).split("/")[2]
 			project = findProject(project_id)
 			if project == None:
 				return {
@@ -338,7 +352,7 @@ class FFMpegServer(HTTPServer):
 					"headers": {},
 					"content": b"Project Not Found"
 				}
-			filename = path.split("/")[3]
+			filename = unquote(path).split("/")[3]
 			if filename not in project.files.keys():
 				return {
 					"status": 404,

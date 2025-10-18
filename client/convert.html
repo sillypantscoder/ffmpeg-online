@@ -6,7 +6,7 @@ body {
 	font-family: sans-serif;
 	margin: 1em;
 }
-button {
+#convert_buttons button {
 	display: inline-block;
 	margin: 0.5em;
 	border: 0.125em solid blue;
@@ -18,11 +18,18 @@ button {
 	font-family: inherit;
 	color: inherit;
 }
+img {
+	height: 1em;
+	width: auto;
+	vertical-align: middle;
+	margin-left: 0.5em;
+	margin-right: 0.25em;
+}
 		</style>
 	</head>
 	<body>
 		<div><button onclick="cancelConversion()">Cancel</button></div>
-		<h3>Convert File</h3>
+		<h3>Convert<img><span></span></h3>
 		<div id="convert_buttons"></div>
 		<script type="text/plain">{{CONVERSION_DATA}}</script>
 		<script src="/convert.js"></script>

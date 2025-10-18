@@ -3,6 +3,9 @@ var file_data = (() => {
 	if (button_container == null) throw new Error("button container must exist")
 	/** @type {{ file: { type: "audio" | "video", name: string }, conversions: { name: string }[] }} */
 	var conversion_data = JSON.parse(document.querySelector("script[type='text/plain']")?.textContent ?? "")
+	// File info in header
+	document.querySelector("h3 img")?.setAttribute("src", `/icons/${conversion_data.file.type}_file.svg`);
+	(document.querySelector("h3 span") ?? document.createElement("span")).textContent = conversion_data.file.name
 	// Create convert buttons
 	for (var i = 0; i < conversion_data.conversions.length; i++) {
 		let conversion = conversion_data.conversions[i]

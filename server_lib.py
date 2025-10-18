@@ -2,7 +2,7 @@ import socket
 import http.server
 import os
 import datetime
-#from urllib.parse import unquote
+from urllib.parse import unquote
 import typing
 import sys
 from types import TracebackType
@@ -52,7 +52,7 @@ class SafeDict:
 	@staticmethod
 	def from_query(query: str):
 		fields: dict[str, str] = {}
-		for f in query.split("&"):
+		for f in unquote(query).split("&"):
 			s = f.split("=")
 			if len(s) >= 2:
 				fields[s[0].lower()] = s[1]

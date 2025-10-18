@@ -1,24 +1,27 @@
 (() => {
-	var table = document.querySelector("table")
-	if (table == null) throw new Error("table must exist")
+	var fileContainer = document.querySelector("#files")
+	if (fileContainer == null) throw new Error("file container must exist")
 	/** @type {{ files: { name: string, type: "audio" | "video" }[], conversions: { name: string }[] }} */
-	var project_data = JSON.parse(document.querySelector("script[type='text/plain']")?.textContent ?? "")
+	var project_data = JSON.parse(document.querySelector("script[type='text/plain']")?.innerHTML ?? "")
 	// Create file elements
 	for (var file of project_data.files) {
-		let row = table.appendChild(document.createElement("tr"))
+		let row = fileContainer.appendChild(document.createElement("div"))
+		row.classList.add("file-row")
 		// Icon
-		row.appendChild(document.createElement("td")).innerHTML = `[${file.type} icon]`
+		row.appendChild(document.createElement("div")).innerHTML = `<img src="/icons/${file.type}_file.svg">`
 		// Name
-		row.appendChild(document.createElement("td")).innerHTML = `${file.name}`
+		row.appendChild(document.createElement("div")).innerHTML = `<span>${file.name}</span>`
 		// Convert Button
-		row.appendChild(document.createElement("td")).innerHTML = `<button onclick='convertFile(${JSON.stringify(file.name)})'>Convert...</button>`
+		row.appendChild(document.createElement("div")).innerHTML = `<button>Convert...</button>`
+		row.children[2].children[0].addEventListener("click", convertFile.bind(null, file.name))
 		// Download Button
-		row.appendChild(document.createElement("td")).innerHTML = `<button onclick='downloadFile(${JSON.stringify(file.name)})'>Download</button>`
+		row.appendChild(document.createElement("div")).innerHTML = `<button>Download</button>`
+		row.children[3].children[0].addEventListener("click", downloadFile.bind(null, file.name))
 	}
 	// Create conversion elements
 	if (project_data.conversions.length > 0) {
 		// Create conversion list
-		var c_list = document.appendChild(document.createElement("ol"))
+		var c_list = document.body.appendChild(document.createElement("ol"))
 		// Create heading (inserted before c_list)
 		{
 			let table2heading = document.createElement("h3")
