@@ -449,6 +449,60 @@ class FFMpegServer(HTTPServer):
 				"headers": {},
 				"content": b""
 			}
+		elif path.startswith("/rename_file/"):
+			project_id = path[13:]
+			project = findProject(project_id)
+			if project == None:
+				return {
+					"status": 404,
+					"headers": {},
+					"content": b"Project Not Found"
+				}
+			filename = query.get("name")
+			if filename not in project.files.keys():
+				return {
+					"status": 404,
+					"headers": {},
+					"content": b"File Not Found"
+				}
+			newName = query.get("newName") + "." + project.files[filename].extension
+			if newName in project.files.keys():
+				return {
+					"status": 404,
+					"headers": {},
+					"content": b"File Already Exists"
+				}
+			# Rename the file
+			project.files[newName] = project.files[filename]
+			del project.files[filename]
+			return {
+				"status": 200,
+				"headers": {},
+				"content": b""
+			}
+		elif path.startswith("/delete_file/"):
+			project_id = path[13:]
+			project = findProject(project_id)
+			if project == None:
+				return {
+					"status": 404,
+					"headers": {},
+					"content": b"Project Not Found"
+				}
+			filename = query.get("name")
+			if filename not in project.files.keys():
+				return {
+					"status": 404,
+					"headers": {},
+					"content": b"File Not Found"
+				}
+			# Rename the file
+			del project.files[filename]
+			return {
+				"status": 200,
+				"headers": {},
+				"content": b""
+			}
 		else:
 			log("#", "404 POST encountered: " + path)
 			return {
