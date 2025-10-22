@@ -207,6 +207,9 @@ def get_available_conversions(f: File, filename: str):
 		if f.extension != "mp4": conversions.append(FileFormatConversion("video", filename, "mp4"))
 		if f.extension != "mov": conversions.append(FileFormatConversion("video", filename, "mov"))
 		if f.extension != "webm": conversions.append(FileFormatConversion("video", filename, "webm"))
+	# Extract Audio From Video
+	if f.type == "video":
+		conversions.append(FileFormatConversion("audio", filename, "mp3"))
 	# Cut Media
 	if f.extension == "mp3" or f.extension == "mp4": conversions.append(CutConversion(f.type, filename))
 	# Finish
