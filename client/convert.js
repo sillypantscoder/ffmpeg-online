@@ -1,11 +1,16 @@
 var conversion_data = (() => {
 	var button_container = document.querySelector("#convert_buttons")
 	if (button_container == null) throw new Error("button container must exist")
-	/** @type {{ file: { type: "audio" | "video", name: string }, conversions: { name: string, arguments: string[] }[] }} */
+	/** @type {{ file: { type: { audio: boolean, video: boolean, subtitles: boolean }, name: string }, conversions: { name: string, arguments: string[] }[] }} */
 	var conversion_data = JSON.parse(document.querySelector("script[type='text/plain']")?.textContent ?? "")
 	// File info in header
-	document.querySelector("h3 img")?.setAttribute("src", `/icons/${conversion_data.file.type}_file.svg`);
-	(document.querySelector("h3 span") ?? document.createElement("span")).textContent = conversion_data.file.name
+	var title_name = document.querySelector("h3 span")
+	if (title_name != null) {
+		if (conversion_data.file.type.audio) title_name.insertAdjacentElement("beforebegin", document.createElement("img"))?.setAttribute("src", `/icons/audio_file.svg`);
+		if (conversion_data.file.type.video) title_name.insertAdjacentElement("beforebegin", document.createElement("img"))?.setAttribute("src", `/icons/video_file.svg`);
+		if (conversion_data.file.type.subtitles) title_name.insertAdjacentElement("beforebegin", document.createElement("img"))?.setAttribute("src", `/icons/subtitles_file.svg`);
+		title_name.textContent = conversion_data.file.name
+	}
 	// Create convert buttons
 	for (var i = 0; i < conversion_data.conversions.length; i++) {
 		let conversion = conversion_data.conversions[i]

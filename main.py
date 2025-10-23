@@ -51,21 +51,29 @@ def runFFMpegCommandWithProgress(command: list[str], expected_duration: str | in
 			timeTotal = (60 * ((60 * timeH) + timeM)) + timeS
 			progress_callback(timeTotal, duration_seconds)
 		if line == b"progress=end\n": break # Done!
+# TODO: Add this but for whisper. We can split each line on " --> <time>]" and end when the <time> becomes very close to the media duration.
 
 
+
+class FileType(typing.TypedDict):
+	audio: bool
+	video: bool
+	subtitles: bool
 
 class File:
-	def __init__(self, type: typing.Literal["audio", "video"], extension: str, duration: float, contents: bytes):
-		self.type: typing.Literal["audio", "video"] = type
+	def __init__(self, type: FileType, extension: str, duration: float, contents: bytes):
+		self.type: FileType = type
 		self.extension = extension
 		self.duration = duration
 		self.contents = contents
 	def get_mime(self):
+		type = "video" if self.type["video"] else ("audio" if self.type["audio"] else "application")
+		if type == "application": return "application/x-subrip"
 		subtype = self.extension
 		if self.extension == "mov": subtype = "quicktime"
-		return self.type + "/" + subtype
+		return type + "/" + subtype
 	@staticmethod
-	def guess_type(data: bytes) -> typing.Literal["audio", "video"]:
+	def guess_type(data: bytes) -> FileType:
 		# Use ffprobe
 		write_file("checkfile.dat", data)
 		raw_info = subprocess.run(["ffprobe", "checkfile.dat"], stderr=subprocess.PIPE).stderr
@@ -73,16 +81,28 @@ class File:
 		streams_raw = [b": ".join(line.split(b": ")[1:]) for line in raw_info.split(b"\n") if b"Stream" in line]
 		has_audio = any([(b"Audio" in line) for line in streams_raw])
 		has_video = any([(b"Video" in line and b"kb/s" in line) for line in streams_raw]) # we don't want to accidentally interpret images as video streams
+		has_subtitles = any([(b"Subtitle" in line) for line in streams_raw])
 		# Check for video
-		if not (has_audio or has_video): raise ValueError("This file is not a video/audio file")
-		if has_video: return "video"
-		else: return "audio"
+		if not (has_audio or has_video or has_subtitles): raise ValueError("This file is not a video/audio file")
+		return { "audio": has_audio, "video": has_video, "subtitles": has_subtitles }
 	@staticmethod
-	def get_duration(data: bytes):
+	def get_media_duration(data: bytes):
 		write_file("checkfile.dat", data)
 		return float(subprocess.run([
 			"ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", "checkfile.dat"
 		], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout.decode("UTF-8").strip())
+	@staticmethod
+	def get_subtitles_duration(data: bytes):
+		lines = data.strip().split(b"\n")
+		last_timestamp = lines[-2].split(b" --> ")[-1].decode("UTF-8")
+		return \
+			(int(last_timestamp.split(":")[0]) * 60 * 60) + \
+			(int(last_timestamp.split(":")[1]) * 60) + \
+			float(last_timestamp.split(":")[2].replace(",", "."))
+	@staticmethod
+	def get_duration(data: bytes, file_type: FileType):
+		if file_type["audio"] or file_type["video"]: return File.get_media_duration(data)
+		else: return File.get_subtitles_duration(data)
 
 class Conversion:
 	def get_name(self) -> str:
@@ -122,8 +142,8 @@ class ConversionWithOwnFolder(Conversion):
 		...
 
 class FileFormatConversion(ConversionWithOwnFolder):
-	def __init__(self, type: typing.Literal["audio", "video"], previous_filename: str, new_format: str):
-		self.type: typing.Literal["audio", "video"] = type
+	def __init__(self, type: FileType, previous_filename: str, new_format: str):
+		self.type: FileType = type
 		self.new_format = new_format
 		self.filename = previous_filename
 		self.progress = "0"
@@ -139,12 +159,12 @@ class FileFormatConversion(ConversionWithOwnFolder):
 		self.progress = str(round(1000 * done / total) / 10)
 	async def get_result_files(self, new_files: list[str]) -> dict[str, File]:
 		return {
-			self.filename: File(self.type, self.new_format, File.get_duration(read_file(new_files[0])), read_file(new_files[0]))
+			self.filename: File(self.type, self.new_format, File.get_media_duration(read_file(new_files[0])), read_file(new_files[0]))
 		}
 
 class CutConversion(ConversionWithOwnFolder):
-	def __init__(self, type: typing.Literal["audio", "video"], filename: str):
-		self.type: typing.Literal["audio", "video"] = type
+	def __init__(self, type: FileType, filename: str):
+		self.type: FileType = type
 		self.file_name = ".".join(filename.split(".")[:-1])
 		self.file_extension = filename.split(".")[-1]
 		self.progress = "0"
@@ -190,28 +210,47 @@ class CutConversion(ConversionWithOwnFolder):
 	async def get_result_files(self, new_files: list[str]) -> dict[str, File]:
 		return {
 			self.file_name + "_cut." + self.file_extension:
-				File(self.type, self.file_extension, File.get_duration(read_file(new_files[0])), read_file(new_files[0]))
+				File(self.type, self.file_extension, File.get_media_duration(read_file(new_files[0])), read_file(new_files[0]))
+		}
+
+class AudioTranscriptionConversion(ConversionWithOwnFolder):
+	def __init__(self, previous_filename: str):
+		self.filename = previous_filename
+	def get_name(self):
+		return "Transcribe"
+	def get_status(self):
+		return "Transcribing " + self.filename
+	async def process_files(self, folder: str, input_filenames: list[str], extra_data: str):
+		subprocess.run([
+			"whisper", "--model", "turbo", "--language", "English", "--threads", "2", "--output_format", "srt", input_filenames[0].split("/")[-1]
+		], cwd=folder)
+	def setProgress(self, done: float, total: float):
+		self.progress = str(round(1000 * done / total) / 10)
+	async def get_result_files(self, new_files: list[str]) -> dict[str, File]:
+		return {
+			self.filename: File({ "audio": False, "video": False, "subtitles": True }, "srt", File.get_subtitles_duration(read_file(new_files[0])), read_file(new_files[0]))
 		}
 
 def get_available_conversions(f: File, filename: str):
 	"""ADD NEW FILE TYPES HERE"""
 	conversions: list[Conversion] = []
-	# Convert Audio Formats
-	if f.type == "audio":
-		if f.extension != "mp3": conversions.append(FileFormatConversion("audio", filename, "mp3"))
-		if f.extension != "wav": conversions.append(FileFormatConversion("audio", filename, "wav"))
-		if f.extension != "webm": conversions.append(FileFormatConversion("audio", filename, "webm"))
-		if f.extension != "ogg": conversions.append(FileFormatConversion("audio", filename, "ogg"))
-	# Convert Video Formats
-	if f.type == "video":
-		if f.extension != "mp4": conversions.append(FileFormatConversion("video", filename, "mp4"))
-		if f.extension != "mov": conversions.append(FileFormatConversion("video", filename, "mov"))
-		if f.extension != "webm": conversions.append(FileFormatConversion("video", filename, "webm"))
-	# Extract Audio From Video
-	if f.type == "video":
-		conversions.append(FileFormatConversion("audio", filename, "mp3"))
+	if f.type["video"]:
+		# Convert Video Formats
+		if f.extension != "mp4": conversions.append(FileFormatConversion(f.type, filename, "mp4"))
+		if f.extension != "mov": conversions.append(FileFormatConversion(f.type, filename, "mov"))
+		if f.extension != "webm": conversions.append(FileFormatConversion(f.type, filename, "webm"))
+		# Extract Audio From Video
+		conversions.append(FileFormatConversion({ "audio": True, "video": False, "subtitles": False }, filename, "mp3"))
+	elif f.type["audio"]:
+		# Convert Audio Formats
+		if f.extension != "mp3": conversions.append(FileFormatConversion({ "audio": True, "video": False, "subtitles": False }, filename, "mp3"))
+		if f.extension != "wav": conversions.append(FileFormatConversion({ "audio": True, "video": False, "subtitles": False }, filename, "wav"))
+		if f.extension != "webm": conversions.append(FileFormatConversion({ "audio": True, "video": False, "subtitles": False }, filename, "webm"))
+		if f.extension != "ogg": conversions.append(FileFormatConversion({ "audio": True, "video": False, "subtitles": False }, filename, "ogg"))
 	# Cut Media
 	if f.extension == "mp3" or f.extension == "mp4": conversions.append(CutConversion(f.type, filename))
+	# Transcription
+	if f.type["audio"] or f.type["video"]: conversions.append(AudioTranscriptionConversion(filename))
 	# Finish
 	return conversions
 
@@ -427,7 +466,7 @@ class FFMpegServer(HTTPServer):
 				"content": b"Invalid File Type"
 			}
 			# Save
-			project.files[filename + "." + file_extension] = File(file_type, file_extension, File.get_duration(body), body)
+			project.files[filename + "." + file_extension] = File(file_type, file_extension, File.get_duration(body, file_type), body)
 			return {
 				"status": 200,
 				"headers": {},

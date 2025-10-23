@@ -42,8 +42,8 @@ function formatFileDuration(seconds) {
 	var minutes = Math.floor(seconds / 60); seconds -= minutes * 60;
 	var hours = Math.floor(minutes / 60); minutes -= hours * 60;
 	seconds = Math.round(seconds * 100) / 100
-	if (hours > 0) return `${hours} hours ${minutes.toString().padStart(2, "0")} minutes ${seconds.toString().padStart(2, "0")} seconds`
-	else return `${minutes} minutes ${seconds.toString().padStart(2, "0")} seconds`
+	if (hours > 0) return `${hours} hours ${minutes} minutes ${seconds} seconds`
+	else return `${minutes} minutes ${seconds} seconds`
 }
 
 function updateProjectInfo() {
@@ -53,14 +53,14 @@ function updateProjectInfo() {
 	[...fileContainer.children].forEach((v) => v.remove());
 	[...document.querySelectorAll("button[disabled], script + h3, ol")].forEach((v) => v.remove());
 	// Get project data
-	/** @type {{ files: { name: string, type: "audio" | "video", size: number, duration: number }[], conversions: { name: string }[] }} */
+	/** @type {{ files: { name: string, type: { audio: boolean, video: boolean, subtitles: boolean }, size: number, duration: number }[], conversions: { name: string }[] }} */
 	var project_data = JSON.parse(document.querySelector("script[type='text/plain']")?.innerHTML ?? "")
 	// Create file elements
-	for (var file of project_data.files) {
+	for (let file of project_data.files) {
 		let row = fileContainer.appendChild(document.createElement("div"))
 		row.classList.add("file-row")
 		// Icon
-		row.appendChild(document.createElement("div")).innerHTML = `<img src="/icons/${file.type}_file.svg">`
+		row.appendChild(document.createElement("div")).innerHTML = `<img src="/icons/${file.type.audio ? 'audio_file' : 'file_blank'}.svg"><img src="/icons/${file.type.video ? 'video_file' : 'file_blank'}.svg"><img src="/icons/${file.type.subtitles ? 'subtitles_file' : 'file_blank'}.svg">`
 		// Name
 		row.appendChild(document.createElement("div")).innerHTML = `<span>${file.name}<div style="font-size: 0.75em; opacity: 0.75;">${formatFileSize(file.size)} - ${formatFileDuration(file.duration)}</div></span>`
 		// Convert Button
