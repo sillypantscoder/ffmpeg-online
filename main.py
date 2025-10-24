@@ -25,12 +25,15 @@ def validate_filename(name: str):
 		else: continue
 	return n
 
+def removeFE(name: str):
+	return ".".join(name.split(".")[:-1])
+
 def get_file_size(filename: str) -> int:
 	if os.path.isdir(filename):
 		return len(filename.split("/")[-1]) + sum([get_file_size(os.path.join(filename, subfile)) for subfile in os.listdir(filename)])
 	return len(filename.split("/")[-1]) + os.path.getsize(filename)
 
-def runFFMpegCommandWithProgress(command: list[str], expected_duration: str | int, progress_callback: typing.Callable[[ float, float ], None]):
+def runFFMpegCommandWithProgress(command: list[str], expected_duration: str | float, progress_callback: typing.Callable[[ float, float ], None]):
 	# First find the file size
 	if isinstance(expected_duration, str):
 		duration_seconds = float(subprocess.run([
@@ -105,23 +108,26 @@ class File:
 		else: return File.get_subtitles_duration(data)
 
 class Conversion:
+	def __init__(self, files: dict[str, File]):
+		self.files = files
 	def get_name(self) -> str:
 		...
 	def get_arguments(self) -> list[str]:
 		return []
 	def get_status(self) -> str:
 		...
-	async def convert(self, files: list[File], extra_data: str) -> dict[str, File]:
+	async def convert(self, extra_data: str) -> dict[str, File]:
 		...
 
 class ConversionWithOwnFolder(Conversion):
-	async def convert(self, files: list[File], extra_data: str) -> dict[str, File]:
+	async def convert(self, extra_data: str) -> dict[str, File]:
 		# Create Folder
 		folder = "files_" + str(random.randint(1, 100000000))
 		os.makedirs(folder)
 		# Write Files
+		files: list[File] = [*self.files.values()]
 		input_filenames: list[str] = []
-		for i in range(len(files)):
+		for i in range(len(self.files)):
 			filename = folder + "/input_" + str(i) + "." + files[i].extension
 			write_file(filename, files[i].contents)
 			input_filenames.append(filename)
@@ -142,10 +148,10 @@ class ConversionWithOwnFolder(Conversion):
 		...
 
 class FileFormatConversion(ConversionWithOwnFolder):
-	def __init__(self, type: FileType, previous_filename: str, new_format: str):
-		self.type: FileType = type
+	def __init__(self, filename: str, file: File, new_format: str):
+		super().__init__({ filename: file })
+		self.filename = filename
 		self.new_format = new_format
-		self.filename = previous_filename
 		self.progress = "0"
 	def get_name(self):
 		return "Convert to " + self.new_format.upper()
@@ -158,15 +164,17 @@ class FileFormatConversion(ConversionWithOwnFolder):
 	def setProgress(self, done: float, total: float):
 		self.progress = str(round(1000 * done / total) / 10)
 	async def get_result_files(self, new_files: list[str]) -> dict[str, File]:
-		return {
-			self.filename: File(self.type, self.new_format, File.get_media_duration(read_file(new_files[0])), read_file(new_files[0]))
+		file_contents = read_file(new_files[0])
+		return { # Remember: File extensions will be reset to File.extension
+			self.filename: File(File.guess_type(file_contents), self.new_format, File.get_media_duration(file_contents), file_contents)
 		}
 
 class CutConversion(ConversionWithOwnFolder):
-	def __init__(self, type: FileType, filename: str):
-		self.type: FileType = type
-		self.file_name = ".".join(filename.split(".")[:-1])
+	def __init__(self, filename: str, file: File):
+		super().__init__({ filename: file })
+		self.file_name = removeFE(filename)
 		self.file_extension = filename.split(".")[-1]
+		self.file_type = file.type
 		self.progress = "0"
 	def get_name(self):
 		return "Cut"
@@ -209,13 +217,14 @@ class CutConversion(ConversionWithOwnFolder):
 		self.progress = str(round(1000 * done / total) / 10)
 	async def get_result_files(self, new_files: list[str]) -> dict[str, File]:
 		return {
-			self.file_name + "_cut." + self.file_extension:
-				File(self.type, self.file_extension, File.get_media_duration(read_file(new_files[0])), read_file(new_files[0]))
+			self.file_name + "_cut":
+				File(self.file_type, self.file_extension, File.get_duration(read_file(new_files[0]), self.file_type), read_file(new_files[0]))
 		}
 
 class AudioTranscriptionConversion(ConversionWithOwnFolder):
-	def __init__(self, previous_filename: str):
-		self.filename = previous_filename
+	def __init__(self, filename: str, file: File):
+		super().__init__({ filename: file })
+		self.filename = filename
 	def get_name(self):
 		return "Transcribe"
 	def get_status(self):
@@ -224,33 +233,38 @@ class AudioTranscriptionConversion(ConversionWithOwnFolder):
 		subprocess.run([
 			"whisper", "--model", "turbo", "--language", "English", "--threads", "2", "--output_format", "srt", input_filenames[0].split("/")[-1]
 		], cwd=folder)
-	def setProgress(self, done: float, total: float):
-		self.progress = str(round(1000 * done / total) / 10)
 	async def get_result_files(self, new_files: list[str]) -> dict[str, File]:
 		return {
 			self.filename: File({ "audio": False, "video": False, "subtitles": True }, "srt", File.get_subtitles_duration(read_file(new_files[0])), read_file(new_files[0]))
 		}
 
-def get_available_conversions(f: File, filename: str):
+def get_available_conversions(files: dict[str, File]):
 	"""ADD NEW FILE TYPES HERE"""
 	conversions: list[Conversion] = []
-	if f.type["video"]:
-		# Convert Video Formats
-		if f.extension != "mp4": conversions.append(FileFormatConversion(f.type, filename, "mp4"))
-		if f.extension != "mov": conversions.append(FileFormatConversion(f.type, filename, "mov"))
-		if f.extension != "webm": conversions.append(FileFormatConversion(f.type, filename, "webm"))
-		# Extract Audio From Video
-		conversions.append(FileFormatConversion({ "audio": True, "video": False, "subtitles": False }, filename, "mp3"))
-	elif f.type["audio"]:
-		# Convert Audio Formats
-		if f.extension != "mp3": conversions.append(FileFormatConversion({ "audio": True, "video": False, "subtitles": False }, filename, "mp3"))
-		if f.extension != "wav": conversions.append(FileFormatConversion({ "audio": True, "video": False, "subtitles": False }, filename, "wav"))
-		if f.extension != "webm": conversions.append(FileFormatConversion({ "audio": True, "video": False, "subtitles": False }, filename, "webm"))
-		if f.extension != "ogg": conversions.append(FileFormatConversion({ "audio": True, "video": False, "subtitles": False }, filename, "ogg"))
-	# Cut Media
-	if f.extension == "mp3" or f.extension == "mp4": conversions.append(CutConversion(f.type, filename))
-	# Transcription
-	if f.type["audio"] or f.type["video"]: conversions.append(AudioTranscriptionConversion(filename))
+	if len(files.values()) == 0: return conversions
+	elif len(files.values()) == 1:
+		filename = [*files.keys()][0]
+		file = files[filename]
+		if file.type["video"]:
+			# Convert Video Formats
+			if file.extension != "mp4": conversions.append(FileFormatConversion(filename, file, "mp4"))
+			if file.extension != "mov": conversions.append(FileFormatConversion(filename, file, "mov"))
+			if file.extension != "webm": conversions.append(FileFormatConversion(filename, file, "webm"))
+			# Extract Audio From Video
+			conversions.append(FileFormatConversion(filename, file, "mp3"))
+		if file.type["audio"]:
+			# Convert Audio Formats
+			if file.extension != "mp3": conversions.append(FileFormatConversion(filename, file, "mp3"))
+			if file.extension != "wav": conversions.append(FileFormatConversion(filename, file, "wav"))
+			if file.extension != "webm": conversions.append(FileFormatConversion(filename, file, "webm"))
+			if file.extension != "ogg": conversions.append(FileFormatConversion(filename, file, "ogg"))
+		if file.type["subtitles"]:
+			# Subtitles
+			conversions.append(CutConversion(filename, file))
+		# Cut Media
+		if file.extension == "mp3" or file.extension == "mp4": conversions.append(CutConversion(filename, file))
+		# Transcription
+		if file.type["audio"] or file.type["video"]: conversions.append(AudioTranscriptionConversion(filename, file))
 	# Finish
 	return conversions
 
@@ -260,14 +274,14 @@ class Project:
 		self.id = id
 		self.files: dict[str, File] = {}
 		self.processes: list[InProgressConversion] = []
-	def apply_conversion(self, f: File, conversion: Conversion, extra_data: str):
+	def apply_conversion(self, conversion: Conversion, extra_data: str):
 		"""Apply the conversion, and save the files when it is done."""
 		async def run_conversion():
 			# Get and save result files
-			result_files = await conversion.convert([f], extra_data)
+			result_files = await conversion.convert(extra_data)
 			for filename in result_files:
 				# Find final filename for this file
-				save_filename = ".".join(filename.split(".")[:-1])
+				save_filename = removeFE(filename)
 				while save_filename + "." + result_files[filename].extension in self.files.keys():
 					save_filename += "_"
 				# Save this file!
@@ -391,8 +405,8 @@ class FFMpegServer(HTTPServer):
 				},
 				"content": project.files[filename].contents
 			}
-		elif path.startswith("/convert/"):
-			# Find file in project
+		elif path.startswith("/conversions/"):
+			# Find project
 			project_id = unquote(path).split("/")[2]
 			project = findProject(project_id)
 			if project == None:
@@ -401,38 +415,25 @@ class FFMpegServer(HTTPServer):
 					"headers": {},
 					"content": b"Project Not Found"
 				}
-			filename = unquote(path).split("/")[3]
-			if filename not in project.files.keys():
-				return {
-					"status": 404,
-					"headers": {},
-					"content": b"File Not Found"
-				}
+			# Find files
+			files: dict[str, File] = {}
+			for filename in unquote(path).split("/")[3:]:
+				if filename not in project.files.keys():
+					return {
+						"status": 404,
+						"headers": {},
+						"content": b"File Not Found: " + filename.encode("UTF-8")
+					}
+				files[filename] = project.files[filename]
 			# Get conversions
-			conversions = get_available_conversions(project.files[filename], filename)
+			conversions = get_available_conversions(files)
 			return {
 				"status": 200,
-				"headers": {
-					"Content-Type": "text/html"
-				},
-				"content": read_file("client/convert.html").replace(b"{{CONVERSION_DATA}}", json.dumps({
-					"file": {
-						"type": project.files[filename].type,
-						"name": filename
-					},
-					"conversions": [
-						{ "name": x.get_name(), "arguments": x.get_arguments() }
-						for x in conversions
-					]
-				}).encode("UTF-8"))
-			}
-		elif path == "/convert.js":
-			return {
-				"status": 200,
-				"headers": {
-					"Content-Type": "text/javascript"
-				},
-				"content": read_file("client/convert.js")
+				"headers": {},
+				"content": json.dumps([
+					{ "name": conversion.get_name(), "arguments": conversion.get_arguments() }
+					for conversion in conversions
+				]).encode("UTF-8")
 			}
 		else: # 404 page
 			log("", "404 GET encountered: " + path)
@@ -452,7 +453,7 @@ class FFMpegServer(HTTPServer):
 					"content": b"Project Not Found"
 				}
 			# Find filename
-			filename = ".".join(query.get("name").split(".")[:-1]).split("/")[0]
+			filename = removeFE(query.get("name")).split("/")[0]
 			filename = filename.replace("<", "").replace(">", "").replace("/", "").replace("&", "")
 			while filename in project.files.keys():
 				filename += "_"
@@ -473,7 +474,7 @@ class FFMpegServer(HTTPServer):
 				"content": b""
 			}
 		elif path.startswith("/convert/"):
-			# Find file in project
+			# Find project
 			project_id = unquote(path).split("/")[2]
 			project = findProject(project_id)
 			if project == None:
@@ -482,18 +483,21 @@ class FFMpegServer(HTTPServer):
 					"headers": {},
 					"content": b"Project Not Found"
 				}
-			filename = unquote(path).split("/")[3]
-			if filename not in project.files.keys():
-				return {
-					"status": 404,
-					"headers": {},
-					"content": b"File Not Found"
-				}
+			# Find files
+			files: dict[str, File] = {}
+			for filename in unquote(path).split("/")[3:]:
+				if filename not in project.files.keys():
+					return {
+						"status": 404,
+						"headers": {},
+						"content": b"File Not Found: " + filename.encode("UTF-8")
+					}
+				files[filename] = project.files[filename]
 			# Get conversion
-			conversion_index = int(path.split("/")[4])
-			conversion = get_available_conversions(project.files[filename], filename)[conversion_index]
+			conversion_index = int(query.get("c"))
+			conversion = get_available_conversions(files)[conversion_index]
 			# Apply conversion
-			project.apply_conversion(project.files[filename], conversion, body.decode("UTF-8"))
+			project.apply_conversion(conversion, body.decode("UTF-8"))
 			return {
 				"status": 200,
 				"headers": {},
