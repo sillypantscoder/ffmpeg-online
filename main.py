@@ -42,7 +42,7 @@ def runFFMpegCommandWithProgress(command: list[str], expected_duration: str | fl
 	else:
 		duration_seconds = expected_duration
 	# Start the command
-	proc = subprocess.Popen(["ffmpeg", "-progress", "-", "-nostats", *command], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+	proc = subprocess.Popen(["ffmpeg", "-progress", "-", "-nostats", *command], stdout=subprocess.PIPE) # , stderr=subprocess.DEVNULL
 	if proc.stdout == None: raise TypeError
 	while True:
 		line = proc.stdout.readline()
@@ -256,6 +256,52 @@ class CutConversion(ConversionWithOwnFolder):
 		 	))
 		]
 
+class JoinConversion(ConversionWithOwnFolder):
+	def __init__(self, files: list[NamedFile]):
+		super().__init__(files)
+		self.fileType = files[0][1].type
+		for f in files:
+			if f[1].type != self.fileType:
+				raise TypeError
+		self.progress = "0"
+	def get_name(self):
+		return "Join Files"
+	def get_status(self):
+		return "Joining " + " and ".join([n[0] + "." + n[1].extension for n in self.files]) + " (" + self.progress + "% done)"
+	async def process_files(self, folder: str, input_filenames: list[str], extra_data: str):
+		# TODO: Join subtitles as well
+		# Register input files
+		arguments: list[str | typing.Callable[[ ], str]] = []
+		for filename in input_filenames:
+			arguments.append("-i")
+			arguments.append(filename)
+		# Complex filter inputs
+		complex_filter = ""
+		for i in range(len(input_filenames)):
+			if self.fileType["video"]: complex_filter += f"[{i}:v:0]"
+			if self.fileType["audio"]: complex_filter += f"[{i}:a:0]"
+		# Complex filter operation
+		complex_filter += f"concat=n={len(input_filenames)}:v={1 if self.fileType['video'] else 0}:a={1 if self.fileType['audio'] else 0}"
+		# Add complex filter to arguments
+		arguments.append("-filter_complex")
+		arguments.append(lambda : complex_filter)
+		# Add complex filter outputs and output mappings
+		if self.fileType["video"]: complex_filter += "[outv]"; arguments.extend(["-map", "[outv]"])
+		if self.fileType["audio"]: complex_filter += "[outa]"; arguments.extend(["-map", "[outa]"])
+		# Run command!
+		duration = sum([File.get_duration(x[1].contents, x[1].type) for x in self.files])
+		runFFMpegCommandWithProgress([
+			*[(x if isinstance(x, str) else x()) for x in arguments], folder + "/output." + self.files[0][1].extension
+		], duration, self.setProgress)
+	def setProgress(self, done: float, total: float):
+		self.progress = str(round(1000 * done / total) / 10)
+	async def get_result_files(self, new_files: list[str]) -> list[NamedFile]:
+		return [
+			("_".join([x[0] for x in self.files]), File(
+				self.fileType, self.files[0][1].extension, File.get_duration(read_file(new_files[0]), self.fileType), read_file(new_files[0])
+			))
+		]
+
 class AudioTranscriptionConversion(ConversionWithOwnFolder):
 	def __init__(self, file: NamedFile):
 		super().__init__([file])
@@ -302,6 +348,10 @@ def get_available_conversions(files: list[NamedFile]):
 		if ext == "mp3" or ext == "mp4": conversions.append(CutConversion(named_file))
 		# Transcription
 		if ftype["audio"] or ftype["video"]: conversions.append(AudioTranscriptionConversion(named_file))
+	elif len(files) >= 2:
+		# Joining
+		try: conversions.append(JoinConversion(files))
+		except TypeError: pass
 	# Finish
 	return conversions
 

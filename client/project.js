@@ -56,7 +56,7 @@ function updateProjectInfo() {
 	var fileContainer = document.querySelector("#files")
 	if (fileContainer == null) throw new Error("file container must exist");
 	[...fileContainer.children].forEach((v) => v.remove());
-	[...document.querySelectorAll("body :not(body > h3:first-child, #files, script)")].forEach((v) => v.remove());
+	[...document.querySelectorAll("body :not(body > h3:first-child, #files, #upload-more, #upload-more input, script)")].forEach((v) => v.remove());
 	// Get project data
 	/** @type {{ files: { name: string, type: { audio: boolean, video: boolean, subtitles: boolean }, size: number, duration: number }[], conversions: { name: string }[] }} */
 	var project_data = JSON.parse(document.querySelector("script[type='text/plain']")?.innerHTML ?? "")
