@@ -7,6 +7,7 @@ import json
 import subprocess
 import threading
 from urllib.parse import unquote
+import math
 
 FOLDER_PATH =            r"([a-zA-Z%0-9 _\.\+,!:;\(\)\-]+/)*"
 FILE_PATH = FOLDER_PATH + r"[a-zA-Z%0-9 _\.\+,!:;\(\)\-]+\.[a-zA-Z0-9]+"
@@ -42,7 +43,7 @@ def runFFMpegCommandWithProgress(command: list[str], expected_duration: str | fl
 	else:
 		duration_seconds = expected_duration
 	# Start the command
-	proc = subprocess.Popen(["ffmpeg", "-progress", "-", "-nostats", *command], stdout=subprocess.PIPE) # , stderr=subprocess.DEVNULL
+	proc = subprocess.Popen(["ffmpeg", "-progress", "-", "-nostats", *command], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 	if proc.stdout == None: raise TypeError
 	while True:
 		line = proc.stdout.readline()
@@ -173,6 +174,7 @@ class ConversionWithOwnFolder(Conversion):
 		await self.process_files(folder, input_filenames, extra_data)
 		# Get Result Files
 		new_files = [f"{folder}/{n}" for n in os.listdir(folder) if f"{folder}/{n}" not in input_filenames]
+		new_files.sort(key=lambda x: os.path.getmtime(x))
 		result_files = await self.get_result_files(new_files)
 		# Delete Folder
 		for n in os.listdir(folder): os.remove(f"{folder}/{n}")
@@ -269,7 +271,31 @@ class JoinConversion(ConversionWithOwnFolder):
 	def get_status(self):
 		return "Joining " + " and ".join([n[0] + "." + n[1].extension for n in self.files]) + " (" + self.progress + "% done)"
 	async def process_files(self, folder: str, input_filenames: list[str], extra_data: str):
-		# TODO: Join subtitles as well
+		# Join media (because the "concat" complex filter doesn't support subtitles)
+		if self.fileType["audio"] or self.fileType["video"]:
+			await self.join_media(folder, input_filenames)
+		# Join subtitles
+		if self.fileType["subtitles"]:
+			# Note that input_filenames is guaranteed to be in the same order as self.files
+			# First convert input files to subtitle files
+			for i in range(len(input_filenames)):
+				subprocess.run(["ffmpeg", "-i", input_filenames[i], f"{folder}/subtitles_{i}.srt"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+			# Read files
+			subtitles_data = [read_file(f"{folder}/subtitles_{i}.srt") for i in range(len(input_filenames))]
+			subtitle_files = [
+				(self.files[i][1].duration, subtitles_data[i])
+				for i in range(len(input_filenames))
+			]
+			# Combine files
+			await self.join_subtitles(folder, subtitle_files)
+		# Combine media and subtitles
+		if (self.fileType["audio"] or self.fileType["video"]) and self.fileType["subtitles"]:
+			subprocess.run([
+				"ffmpeg", "-i", folder + "/output_media." + self.files[0][1].extension,
+				"-i", "output_subtitles.srt", "-c", "copy", "-c:s", "mov_text", "-metadata:s:s:0", "language=eng"
+				f"{folder}/output.{self.files[0][1].extension}"
+			], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+	async def join_media(self, folder: str, input_filenames: list[str]):
 		# Register input files
 		arguments: list[str | typing.Callable[[ ], str]] = []
 		for filename in input_filenames:
@@ -291,11 +317,65 @@ class JoinConversion(ConversionWithOwnFolder):
 		# Run command!
 		duration = sum([File.get_duration(x[1].contents, x[1].type) for x in self.files])
 		runFFMpegCommandWithProgress([
-			*[(x if isinstance(x, str) else x()) for x in arguments], folder + "/output." + self.files[0][1].extension
+			*[(x if isinstance(x, str) else x()) for x in arguments], folder + "/output_media." + self.files[0][1].extension
 		], duration, self.setProgress)
+	async def join_subtitles(self, folder: str, subtitle_files: list[tuple[float, bytes]]):
+		output_subs: list[tuple[float, float, bytes]] = []
+		offset = 0
+		for file in subtitle_files:
+			# Parse the file
+			items = [section.split(b"\n") for section in file[1].split(b"\n\n")][:-1]
+			file_subs: list[tuple[float, float, bytes]] = []
+			for item in items:
+				# Parse item time
+				timing = item[1].split(b" --> ")
+				start_time_h = int(timing[0].split(b":")[0].decode("UTF-8"))
+				start_time_m = int(timing[0].split(b":")[1].decode("UTF-8"))
+				start_time_s = float(timing[0].split(b":")[2].decode("UTF-8").replace(",", "."))
+				start_time = (60 * 60 * start_time_h) + (60 * start_time_m) + start_time_s
+				end_time_h = int(timing[1].split(b":")[0].decode("UTF-8"))
+				end_time_m = int(timing[1].split(b":")[1].decode("UTF-8"))
+				end_time_s = float(timing[1].split(b":")[2].decode("UTF-8").replace(",", "."))
+				end_time = (60 * 60 * end_time_h) + (60 * end_time_m) + end_time_s
+				contents = item[2]
+				file_subs.append((start_time, end_time, contents))
+			# Shift file
+			for i in range(len(file_subs)):
+				file_subs[i] = (
+					file_subs[i][0] + offset,
+					file_subs[i][1] + offset,
+					file_subs[i][2]
+				)
+			# Save subtitles
+			output_subs.extend(file_subs)
+			offset += file[0]
+		# Sort output subtitles
+		output_subs.sort(key=lambda x: x[0])
+		# Save subtitles to string
+		output = b""
+		for i in range(len(output_subs)):
+			s = output_subs[i]
+			# Stringify start time
+			start_time_s = s[0]
+			start_time_m = math.floor(start_time_s / 60); start_time_s -= start_time_m * 60
+			start_time_h = math.floor(start_time_m / 60); start_time_m -= start_time_h * 60
+			start_time = str(start_time_h).rjust(2, "0") + ":" + str(start_time_m).rjust(2, "0") + ":" + str(math.floor(start_time_s)).rjust(2, "0") + "," + str(start_time_s - math.floor(start_time_s)).split(".")[1].ljust(3, "0")[:3]
+			# Stringify end time
+			end_time_s = s[1]
+			end_time_m = math.floor(end_time_s / 60); end_time_s -= end_time_m * 60
+			end_time_h = math.floor(end_time_m / 60); end_time_m -= end_time_h * 60
+			end_time = str(end_time_h).rjust(2, "0") + ":" + str(end_time_m).rjust(2, "0") + ":" + str(math.floor(end_time_s)).rjust(2, "0") + "," + str(end_time_s - math.floor(end_time_s)).split(".")[1].ljust(3, "0")[:3]
+			# Save subtitle entry
+			line = str(i + 1).encode("UTF-8") + b"\n" + start_time.encode("UTF-8") + b" --> " + end_time.encode("UTF-8") + b"\n" + s[2] + b"\n\n"
+			output += line
+		# Save string to file
+		write_file(folder + "/output_subtitles.srt", output)
 	def setProgress(self, done: float, total: float):
 		self.progress = str(round(1000 * done / total) / 10)
 	async def get_result_files(self, new_files: list[str]) -> list[NamedFile]:
+		for f in new_files:
+			print(f, File.guess_type(read_file(f)))
+		# TODO: Combine files
 		return [
 			("_".join([x[0] for x in self.files]), File(
 				self.fileType, self.files[0][1].extension, File.get_duration(read_file(new_files[0]), self.fileType), read_file(new_files[0])
