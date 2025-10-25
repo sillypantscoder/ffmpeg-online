@@ -54,7 +54,43 @@ def runFFMpegCommandWithProgress(command: list[str], expected_duration: str | fl
 			timeTotal = (60 * ((60 * timeH) + timeM)) + timeS
 			progress_callback(timeTotal, duration_seconds)
 		if line == b"progress=end\n": break # Done!
-# TODO: Add this but for whisper. We can split each line on " --> <time>]" and end when the <time> becomes very close to the media duration.
+def runWhisperTranscriptionWithProgress(filename: str, cwd: str, progress_callback: typing.Callable[[ float, float ], None]):
+	import time as T
+	# First find the file size
+	duration_seconds = float(subprocess.run([
+		"ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", cwd + "/" + filename
+	], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout.decode("UTF-8").strip())
+	# Set environment variables
+	env = os.environ.copy()
+	env["PYTHONUNBUFFERED"] = "1"
+	# Start the command
+	proc = subprocess.Popen(["whisper", "--model", "turbo", "--language", "English", "--threads", "3", "--output_format", "srt", filename], cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
+	if proc.stdout == None: raise TypeError
+	# Thread for pipe flushing
+	running = True
+	def flush_thread():
+		while running:
+			if proc.stdout == None: raise TypeError
+			proc.stdout.flush()
+			T.sleep(1)
+	threading.Thread(target=flush_thread, args=()).start()
+	# Loop over output
+	while running:
+		T.sleep(0.125)
+		line = proc.stdout.readline()
+		if line.startswith(b"["):
+			time = line[1:].split(b"]")[0].split(b" --> ")[1]
+			# Calculate given time
+			try:
+				timeH = float(time.split(b":")[-3].decode("UTF-8"))
+			except: timeH = 0
+			timeM = float(time.split(b":")[-2].decode("UTF-8"))
+			timeS = float(time.split(b":")[-1].decode("UTF-8"))
+			timeTotal = (60 * ((60 * timeH) + timeM)) + timeS
+			if timeTotal > duration_seconds: timeTotal = duration_seconds
+			progress_callback(timeTotal, duration_seconds)
+		# Finish
+		if len(line) == 0: running = False # Done!
 
 
 
@@ -223,14 +259,15 @@ class CutConversion(ConversionWithOwnFolder):
 class AudioTranscriptionConversion(ConversionWithOwnFolder):
 	def __init__(self, file: NamedFile):
 		super().__init__([file])
+		self.progress = "Initializing..."
 	def get_name(self):
 		return "Transcribe"
 	def get_status(self):
-		return "Transcribing " + self.files[0][0] + "." + self.files[0][1].extension
+		return "Transcribing " + self.files[0][0] + "." + self.files[0][1].extension + " (" + self.progress + ")"
 	async def process_files(self, folder: str, input_filenames: list[str], extra_data: str):
-		subprocess.run([
-			"whisper", "--model", "turbo", "--language", "English", "--threads", "2", "--output_format", "srt", input_filenames[0].split("/")[-1]
-		], cwd=folder)
+		runWhisperTranscriptionWithProgress(input_filenames[0].split("/")[-1], folder, self.setProgress)
+	def setProgress(self, done: float, total: float):
+		self.progress = str(round(1000 * done / total) / 10) + "% done"
 	async def get_result_files(self, new_files: list[str]) -> list[NamedFile]:
 		return [
 			(self.files[0][0] + "_generated", File(
