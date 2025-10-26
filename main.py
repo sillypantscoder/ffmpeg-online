@@ -258,6 +258,50 @@ class CutConversion(ConversionWithOwnFolder):
 		 	))
 		]
 
+class CombiningConversion(ConversionWithOwnFolder):
+	def __init__(self, files: list[NamedFile]):
+		super().__init__(files)
+		self.fileType: FileType = { "audio": False, "video": False, "subtitles": False }
+		for f in files:
+			if f[1].type["audio"]:
+				if self.fileType["audio"]: raise TypeError
+				else: self.fileType["audio"] = True
+			if f[1].type["video"]:
+				if self.fileType["video"]: raise TypeError
+				else: self.fileType["video"] = True
+			if f[1].type["subtitles"]:
+				if self.fileType["subtitles"]: raise TypeError
+				else: self.fileType["subtitles"] = True
+		self.output_file_extension = "mp4" if self.fileType["video"] else ("mp3" if self.fileType["audio"] else ("srt" if self.fileType["subtitles"] else ""))
+		self.progress = "0"
+	def get_name(self):
+		return "Combine Files"
+	def get_status(self):
+		return "Combining " + " and ".join([n[0] + "." + n[1].extension for n in self.files]) + " (" + self.progress + "% done)"
+	async def process_files(self, folder: str, input_filenames: list[str], extra_data: str):
+		# Register input files
+		arguments: list[str] = []
+		for filename in input_filenames:
+			arguments.append("-i")
+			arguments.append(filename)
+		# Streams
+		if self.fileType["video"]: arguments.extend(["-c:v", "copy"])
+		if self.fileType["audio"]: arguments.extend(["-c:a", "copy"])
+		if self.fileType["subtitles"]: arguments.extend(["-c:s", "mov_text", "-metadata:s:s:0", "language=eng"])
+		# Run command!
+		duration = min([File.get_duration(x[1].contents, x[1].type) for x in self.files])
+		runFFMpegCommandWithProgress([
+			*arguments, "-t", str(duration), folder + "/output." + self.output_file_extension
+		], duration, self.setProgress)
+	def setProgress(self, done: float, total: float):
+		self.progress = str(round(1000 * done / total) / 10)
+	async def get_result_files(self, new_files: list[str]) -> list[NamedFile]:
+		return [
+			("_".join([x[0] for x in self.files]), File(
+				self.fileType, self.output_file_extension, File.get_duration(read_file(new_files[0]), self.fileType), read_file(new_files[0])
+			))
+		]
+
 class JoinConversion(ConversionWithOwnFolder):
 	def __init__(self, files: list[NamedFile]):
 		super().__init__(files)
@@ -269,7 +313,7 @@ class JoinConversion(ConversionWithOwnFolder):
 	def get_name(self):
 		return "Join Files"
 	def get_status(self):
-		return "Joining " + " and ".join([n[0] + "." + n[1].extension for n in self.files]) + " (" + self.progress + "% done)"
+		return "Joining " + " and ".join([n[0] + "." + n[1].extension for n in self.files]) + " (" + self.progress + "% done)" # TODO: ETA
 	async def process_files(self, folder: str, input_filenames: list[str], extra_data: str):
 		# Join media (because the "concat" complex filter doesn't support subtitles)
 		if self.fileType["audio"] or self.fileType["video"]:
@@ -292,9 +336,9 @@ class JoinConversion(ConversionWithOwnFolder):
 		if (self.fileType["audio"] or self.fileType["video"]) and self.fileType["subtitles"]:
 			subprocess.run([
 				"ffmpeg", "-i", folder + "/output_media." + self.files[0][1].extension,
-				"-i", "output_subtitles.srt", "-c", "copy", "-c:s", "mov_text", "-metadata:s:s:0", "language=eng"
-				f"{folder}/output.{self.files[0][1].extension}"
-			], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+				"-i", folder + "/output_subtitles.srt", "-c", "copy", "-c:s", "mov_text", # "-metadata:s:s:0", "language=eng"
+				f"{folder}/output_combined.{self.files[0][1].extension}"
+			])
 	async def join_media(self, folder: str, input_filenames: list[str]):
 		# Register input files
 		arguments: list[str | typing.Callable[[ ], str]] = []
@@ -373,12 +417,9 @@ class JoinConversion(ConversionWithOwnFolder):
 	def setProgress(self, done: float, total: float):
 		self.progress = str(round(1000 * done / total) / 10)
 	async def get_result_files(self, new_files: list[str]) -> list[NamedFile]:
-		for f in new_files:
-			print(f, File.guess_type(read_file(f)))
-		# TODO: Combine files
 		return [
 			("_".join([x[0] for x in self.files]), File(
-				self.fileType, self.files[0][1].extension, File.get_duration(read_file(new_files[0]), self.fileType), read_file(new_files[0])
+				self.fileType, self.files[-1][1].extension, File.get_duration(read_file(new_files[-1]), self.fileType), read_file(new_files[-1])
 			))
 		]
 
@@ -422,13 +463,16 @@ def get_available_conversions(files: list[NamedFile]):
 			if ext != "webm": conversions.append(FileFormatConversion(named_file, "webm"))
 			if ext != "ogg": conversions.append(FileFormatConversion(named_file, "ogg"))
 		if ftype["subtitles"]:
-			# Subtitles
-			conversions.append(CutConversion(named_file))
+			# Extract Subtitles
+			if ext != "srt": conversions.append(FileFormatConversion(named_file, "srt"))
 		# Cut Media
-		if ext == "mp3" or ext == "mp4": conversions.append(CutConversion(named_file))
+		conversions.append(CutConversion(named_file))
 		# Transcription
 		if ftype["audio"] or ftype["video"]: conversions.append(AudioTranscriptionConversion(named_file))
 	elif len(files) >= 2:
+		# Combining
+		try: conversions.append(CombiningConversion(files))
+		except TypeError: pass
 		# Joining
 		try: conversions.append(JoinConversion(files))
 		except TypeError: pass
