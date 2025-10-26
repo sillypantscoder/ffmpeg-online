@@ -143,6 +143,12 @@ class File:
 	def get_duration(data: bytes, file_type: FileType):
 		if file_type["audio"] or file_type["video"]: return File.get_media_duration(data)
 		else: return File.get_subtitles_duration(data)
+	@staticmethod
+	def from_filename(filename: str):
+		data = read_file(filename)
+		file_extension = filename.split(".")[-1]
+		type = File.guess_type(data)
+		return File(type, file_extension, File.get_duration(data, type), data)
 
 NamedFile: typing.TypeAlias = tuple[str, File]
 """Indicates a file with a name. The name should not include a file extension."""
@@ -203,9 +209,8 @@ class FileFormatConversion(ConversionWithOwnFolder):
 	def setProgress(self, done: float, total: float):
 		self.progress = str(round(1000 * done / total) / 10)
 	async def get_result_files(self, new_files: list[str]) -> list[NamedFile]:
-		file_contents = read_file(new_files[0])
 		return [
-			(self.files[0][0], File(File.guess_type(file_contents), self.new_format, File.get_media_duration(file_contents), file_contents))
+			(self.files[0][0], File.from_filename(new_files[0]))
 		]
 
 class CutConversion(ConversionWithOwnFolder):
@@ -253,9 +258,7 @@ class CutConversion(ConversionWithOwnFolder):
 		self.progress = str(round(1000 * done / total) / 10)
 	async def get_result_files(self, new_files: list[str]) -> list[NamedFile]:
 		return [
-			(self.files[0][0] + "_cut",
-				File(self.files[0][1].type, self.files[0][1].extension, File.get_duration(read_file(new_files[0]), self.files[0][1].type), read_file(new_files[0])
-		 	))
+			(self.files[0][0] + "_cut", File.from_filename(new_files[0]))
 		]
 
 class CombiningConversion(ConversionWithOwnFolder):
@@ -297,9 +300,7 @@ class CombiningConversion(ConversionWithOwnFolder):
 		self.progress = str(round(1000 * done / total) / 10)
 	async def get_result_files(self, new_files: list[str]) -> list[NamedFile]:
 		return [
-			("_".join([x[0] for x in self.files]), File(
-				self.fileType, self.output_file_extension, File.get_duration(read_file(new_files[0]), self.fileType), read_file(new_files[0])
-			))
+			("_".join([x[0] for x in self.files]), File.from_filename(new_files[0]))
 		]
 
 class JoinConversion(ConversionWithOwnFolder):
@@ -336,7 +337,7 @@ class JoinConversion(ConversionWithOwnFolder):
 		if (self.fileType["audio"] or self.fileType["video"]) and self.fileType["subtitles"]:
 			subprocess.run([
 				"ffmpeg", "-i", folder + "/output_media." + self.files[0][1].extension,
-				"-i", folder + "/output_subtitles.srt", "-c", "copy", "-c:s", "mov_text", # "-metadata:s:s:0", "language=eng"
+				"-i", folder + "/output_subtitles.srt", "-c", "copy", "-c:s", "mov_text", "-metadata:s:s:0", "language=eng",
 				f"{folder}/output_combined.{self.files[0][1].extension}"
 			])
 	async def join_media(self, folder: str, input_filenames: list[str]):
@@ -418,9 +419,7 @@ class JoinConversion(ConversionWithOwnFolder):
 		self.progress = str(round(1000 * done / total) / 10)
 	async def get_result_files(self, new_files: list[str]) -> list[NamedFile]:
 		return [
-			("_".join([x[0] for x in self.files]), File(
-				self.fileType, self.files[-1][1].extension, File.get_duration(read_file(new_files[-1]), self.fileType), read_file(new_files[-1])
-			))
+			("_".join([x[0] for x in self.files]), File.from_filename(new_files[-1]))
 		]
 
 class AudioTranscriptionConversion(ConversionWithOwnFolder):
@@ -460,15 +459,15 @@ def get_available_conversions(files: list[NamedFile]):
 			# Convert Audio Formats
 			if ext != "mp3": conversions.append(FileFormatConversion(named_file, "mp3"))
 			if ext != "wav": conversions.append(FileFormatConversion(named_file, "wav"))
-			if ext != "webm": conversions.append(FileFormatConversion(named_file, "webm"))
+			if ext != "webm" and not ftype["video"]: conversions.append(FileFormatConversion(named_file, "webm"))
 			if ext != "ogg": conversions.append(FileFormatConversion(named_file, "ogg"))
+			# Transcription
+			conversions.append(AudioTranscriptionConversion(named_file))
 		if ftype["subtitles"]:
 			# Extract Subtitles
 			if ext != "srt": conversions.append(FileFormatConversion(named_file, "srt"))
 		# Cut Media
 		conversions.append(CutConversion(named_file))
-		# Transcription
-		if ftype["audio"] or ftype["video"]: conversions.append(AudioTranscriptionConversion(named_file))
 	elif len(files) >= 2:
 		# Combining
 		try: conversions.append(CombiningConversion(files))
