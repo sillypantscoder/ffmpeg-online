@@ -11,7 +11,7 @@ body {
 }
 .file-row {
 	display: flex;
-	align-items: stretch;
+	align-items: center;
 }
 .file-row > div {
 	margin: 0.125em;
@@ -29,6 +29,7 @@ span.image_placeholder {
 }
 .file-row > :nth-child(1) {
 	width: 5em;
+	flex-shrink: 0;
 }
 .file-row > :nth-child(2) {
 	flex-grow: 1;
