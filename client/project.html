@@ -6,6 +6,11 @@ body {
 	font-family: sans-serif;
 	margin: 1em;
 }
+#status {
+	margin-top: 0.5em;
+	margin-bottom: 0.5em;
+	white-space: pre-wrap;
+}
 #files {
 	margin-bottom: 1em;
 }
@@ -81,8 +86,9 @@ button.convert-button.selected {
 	<body>
 		<h3>Files</h3>
 		<div id="files"></div>
-		<div id="upload-more">Upload more files: <input type="file" multiple oninput="uploadFiles(event.target.files)"></div>
+		<div id="upload-more">Upload more files: <input type="file" multiple oninput="event.target.insertAdjacentElement('afterend', document.createElement('div')).id = 'status'; uploadFiles(event.target.files, project_id)"></div>
 		<script type="text/plain">{{PROJECT_DATA}}</script>
+		<script src="/index.js"></script>
 		<script src="/project.js"></script>
 	</body>
 </html>

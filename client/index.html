@@ -6,10 +6,15 @@ body {
 	font-family: sans-serif;
 	margin: 1em;
 }
+#status {
+	margin-top: 1em;
+	white-space: pre-wrap;
+}
 		</style>
 	</head>
 	<body>
-		<input type="file" multiple oninput="uploadFiles(event.target.files)">
+		<input type="file" multiple oninput="uploadFiles(event.target.files, null)">
+		<div id="status"></div>
 		<script src="/index.js"></script>
 	</body>
 </html>

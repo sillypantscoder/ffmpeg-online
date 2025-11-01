@@ -468,6 +468,7 @@ InProgressConversion: typing.TypeAlias = tuple[Conversion, typing.Coroutine[typi
 class Project:
 	def __init__(self, id: str):
 		self.id = id
+		self.uploads: dict[str, bytes] = {}
 		self.files: FileCollection = FileCollection()
 		self.processes: list[InProgressConversion] = []
 	def apply_conversion(self, conversion: Conversion, extra_data: str):
@@ -639,8 +640,8 @@ class FFMpegServer(HTTPServer):
 				"content": b"404 Page Not Found"
 			}
 	def post(self, path: str, query: SafeDict, body: bytes) -> HTTPResponse:
-		if path.startswith("/create_file/"):
-			project_id = path[13:]
+		if path.startswith("/start_upload/"):
+			project_id = path[14:]
 			project = findProject(project_id)
 			if project == None:
 				return {
@@ -653,19 +654,78 @@ class FFMpegServer(HTTPServer):
 			filename = filename.replace("<", "").replace(">", "").replace("/", "").replace("&", "")
 			file_extension = query.get("name").split(".")[-1]
 			file_extension = file_extension.replace("<", "").replace(">", "").replace("/", "").replace("&", "")
+			# Save
+			project.uploads[filename + "." + file_extension] = b""
+			return {
+				"status": 200,
+				"headers": {},
+				"content": b""
+			}
+		elif path.startswith("/upload/"):
+			project_id = path[8:]
+			project = findProject(project_id)
+			if project == None:
+				return {
+					"status": 404,
+					"headers": {},
+					"content": b"Project Not Found"
+				}
+			# Find filename
+			filename = removeFE(query.get("name"))
+			filename = filename.replace("<", "").replace(">", "").replace("/", "").replace("&", "")
+			file_extension = query.get("name").split(".")[-1]
+			file_extension = file_extension.replace("<", "").replace(">", "").replace("/", "").replace("&", "")
+			# Ensure upload exists
+			if filename + "." + file_extension not in project.uploads.keys():
+				return {
+					"status": 400,
+					"headers": {},
+					"content": b"Upload Does Not Exist"
+				}
+			# Save
+			project.uploads[filename + "." + file_extension] += body
+			return {
+				"status": 200,
+				"headers": {},
+				"content": b""
+			}
+		elif path.startswith("/finish_upload/"):
+			project_id = path[15:]
+			project = findProject(project_id)
+			if project == None:
+				return {
+					"status": 404,
+					"headers": {},
+					"content": b"Project Not Found"
+				}
+			# Find filename
+			filename = removeFE(query.get("name"))
+			filename = filename.replace("<", "").replace(">", "").replace("/", "").replace("&", "")
+			file_extension = query.get("name").split(".")[-1]
+			file_extension = file_extension.replace("<", "").replace(">", "").replace("/", "").replace("&", "")
+			# Ensure upload exists
+			if filename + "." + file_extension not in project.uploads.keys():
+				return {
+					"status": 400,
+					"headers": {},
+					"content": b"Upload Does Not Exist"
+				}
+			# Get file contents
+			file_contents = project.uploads[filename + "." + file_extension]
+			del project.uploads[filename + "." + file_extension]
 			# Ensure file does not already exist
 			while filename + "." + file_extension in project.files:
 				filename += "_"
 			# Guess file type
 			try:
-				file_type = File.guess_type(body)
+				file_type = File.guess_type(file_contents)
 			except: return {
 				"status": 400,
 				"headers": {},
 				"content": b"Invalid File Type - " + file_extension.encode("UTF-8")
 			}
 			# Save
-			project.files.add_file(filename, File(file_type, file_extension, File.get_duration(body, file_type), body))
+			project.files.add_file(filename, File(file_type, file_extension, File.get_duration(file_contents, file_type), file_contents))
 			return {
 				"status": 200,
 				"headers": {},

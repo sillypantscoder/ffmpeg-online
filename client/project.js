@@ -1,3 +1,5 @@
+var project_id = location.pathname.split("/").at(-1)
+
 class Utils {
 	/**
 	 * @param {Element} alignElm
@@ -117,7 +119,7 @@ function updateProjectInfo() {
 			/** @type {Promise<string>} */
 			var promise = new Promise((resolve) => {
 				var x = new XMLHttpRequest()
-				x.open("GET", "/project/" + location.pathname.split("/").at(-1))
+				x.open("GET", "/project/" + project_id)
 				x.addEventListener("loadend", () => resolve(x.responseText))
 				x.send()
 			})
@@ -152,7 +154,7 @@ function updateProjectInfo() {
 		var conversion_info = document.body.appendChild(document.createElement("div"))
 		new Promise((resolve) => {
 			var x = new XMLHttpRequest()
-			x.open("GET", "/conversions/" + location.pathname.split("/").at(-1) + "/" + selectedFiles.join("/"))
+			x.open("GET", "/conversions/" + project_id + "/" + selectedFiles.join("/"))
 			x.addEventListener("loadend", () => resolve(x.responseText))
 			x.send()
 		}).then((_data) => {
@@ -172,27 +174,10 @@ function updateProjectInfo() {
 updateProjectInfo()
 
 /**
- * @param {File[]} files
- */
-async function uploadFiles(files) {
-	if (files.length == 0) return;
-	// upload file
-	for (var file of files) {
-		await new Promise((resolve) => {
-			var x = new XMLHttpRequest()
-			x.open("POST", "/create_file/" + location.pathname.split("/").at(-1) + "?name=" + file.name)
-			x.addEventListener("loadend", () => resolve(x.responseText))
-			x.send(file)
-		})
-	}
-	// refresh
-	location.reload()
-}
-/**
  * @param {string} filename
  */
 function convertFile(filename) {
-	location.replace("/convert/" + location.pathname.split("/").at(-1) + "/" + filename)
+	location.replace("/convert/" + project_id + "/" + filename)
 }
 
 /**
@@ -200,7 +185,7 @@ function convertFile(filename) {
  */
 function downloadFile(filename) {
 	var a = document.createElement("a")
-	a.href = "/file/" + location.pathname.split("/").at(-1) + "/" + filename
+	a.href = "/file/" + project_id + "/" + filename
 	a.download = filename
 	a.click()
 }
@@ -213,7 +198,7 @@ async function renameFile(filename) {
 	// send rename
 	await new Promise((resolve) => {
 		var x = new XMLHttpRequest()
-		x.open("POST", "/rename_file/" + location.pathname.split("/").at(-1) + "?name=" + filename + "&newName=" + newName)
+		x.open("POST", "/rename_file/" + project_id + "?name=" + filename + "&newName=" + newName)
 		x.addEventListener("loadend", () => resolve(x.responseText))
 		x.send()
 	})
@@ -229,7 +214,7 @@ async function deleteFile(filename) {
 	// send rename
 	await new Promise((resolve) => {
 		var x = new XMLHttpRequest()
-		x.open("POST", "/delete_file/" + location.pathname.split("/").at(-1) + "?name=" + filename)
+		x.open("POST", "/delete_file/" + project_id + "?name=" + filename)
 		x.addEventListener("loadend", () => resolve(x.responseText))
 		x.send()
 	})
@@ -292,7 +277,7 @@ class ConversionSelection {
 		// request conversion
 		await new Promise((resolve) => {
 			var x = new XMLHttpRequest()
-			x.open("POST", `/convert/${location.pathname.split("/").at(-1)}/${selectedFiles.join("/")}?c=${i}`)
+			x.open("POST", `/convert/${project_id}/${selectedFiles.join("/")}?c=${i}`)
 			x.addEventListener("loadend", () => resolve(x.responseText))
 			x.send(extra_data)
 		})
